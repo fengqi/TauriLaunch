@@ -10,18 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "应用列表",
-        "width": 1080,
-        "height": 620,
-        "minWidth": 760,
-        "minHeight": 420,
-        "resizable": false,
-        "visible": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

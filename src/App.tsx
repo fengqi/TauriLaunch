@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
 type AppEntry = {
@@ -15,11 +14,15 @@ type AppEntry = {
 type AppSettings = {
   windowRightOffset: number;
   windowBottomOffset: number;
+  startupLaunchMode: "tray" | "window";
+  manualLaunchMode: "tray" | "window";
 };
 
 const defaultSettings: AppSettings = {
   windowRightOffset: 10,
   windowBottomOffset: 10,
+  startupLaunchMode: "tray",
+  manualLaunchMode: "window",
 };
 
 const sampleApps: AppEntry[] = [
@@ -224,6 +227,7 @@ function LauncherWindow() {
 
 function SettingsWindow() {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     let canceled = false;
@@ -246,18 +250,25 @@ function SettingsWindow() {
   }, []);
 
   async function saveAndClose() {
-    await invoke("save_settings", { settings });
-    await getCurrentWindow().destroy();
+    try {
+      await invoke("save_settings", { settings });
+      await invoke("close_settings_window");
+    } catch (error) {
+      setSaveError(String(error));
+    }
   }
 
   async function closeSettings() {
-    await getCurrentWindow().destroy();
+    await invoke("close_settings_window");
   }
 
   function updateSetting(name: keyof AppSettings, value: string) {
     setSettings((current) => ({
       ...current,
-      [name]: Math.max(0, Number.parseInt(value, 10) || 0),
+      [name]:
+        name === "windowRightOffset" || name === "windowBottomOffset"
+          ? Math.max(0, Number.parseInt(value, 10) || 0)
+          : value,
     }));
   }
 
@@ -346,6 +357,30 @@ function SettingsWindow() {
 
         <div className="settings-section form-grid">
           <h2>其他设置</h2>
+          <label>
+            <span>开机启动行为</span>
+            <select
+              value={settings.startupLaunchMode}
+              onChange={(event) =>
+                updateSetting("startupLaunchMode", event.currentTarget.value)
+              }
+            >
+              <option value="tray">启动到托盘</option>
+              <option value="window">显示主窗口</option>
+            </select>
+          </label>
+          <label>
+            <span>双击启动行为</span>
+            <select
+              value={settings.manualLaunchMode}
+              onChange={(event) =>
+                updateSetting("manualLaunchMode", event.currentTarget.value)
+              }
+            >
+              <option value="tray">启动到托盘</option>
+              <option value="window">显示主窗口</option>
+            </select>
+          </label>
           <label className="checkbox-row">
             <span>自动添加桌面快捷方式</span>
             <input type="checkbox" />
@@ -358,6 +393,7 @@ function SettingsWindow() {
       </section>
 
       <footer className="dialog-actions">
+        {saveError ? <span className="dialog-error">{saveError}</span> : null}
         <button className="primary" onClick={saveAndClose}>
           确定
         </button>

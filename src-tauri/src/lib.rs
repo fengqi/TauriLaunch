@@ -17,11 +17,32 @@ const ABOUT_LABEL: &str = "about";
 const DEFAULT_RIGHT_OFFSET: i32 = 10;
 const DEFAULT_BOTTOM_OFFSET: i32 = 10;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum LaunchMode {
+    Tray,
+    Window,
+}
+
+fn default_startup_launch_mode() -> LaunchMode {
+    LaunchMode::Tray
+}
+
+fn default_manual_launch_mode() -> LaunchMode {
+    LaunchMode::Window
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
+    #[serde(default = "default_right_offset")]
     window_right_offset: i32,
+    #[serde(default = "default_bottom_offset")]
     window_bottom_offset: i32,
+    #[serde(default = "default_startup_launch_mode")]
+    startup_launch_mode: LaunchMode,
+    #[serde(default = "default_manual_launch_mode")]
+    manual_launch_mode: LaunchMode,
 }
 
 impl Default for AppSettings {
@@ -29,8 +50,18 @@ impl Default for AppSettings {
         Self {
             window_right_offset: DEFAULT_RIGHT_OFFSET,
             window_bottom_offset: DEFAULT_BOTTOM_OFFSET,
+            startup_launch_mode: default_startup_launch_mode(),
+            manual_launch_mode: default_manual_launch_mode(),
         }
     }
+}
+
+fn default_right_offset() -> i32 {
+    DEFAULT_RIGHT_OFFSET
+}
+
+fn default_bottom_offset() -> i32 {
+    DEFAULT_BOTTOM_OFFSET
 }
 
 #[tauri::command]
@@ -52,6 +83,23 @@ fn dismiss_main_window(app: AppHandle) {
 fn dismiss_after_launch(app: AppHandle, app_name: String) {
     println!("launch placeholder: {app_name}");
     destroy_window(&app, MAIN_LABEL);
+}
+
+#[tauri::command]
+fn close_settings_window(app: AppHandle) {
+    destroy_window(&app, SETTINGS_LABEL);
+}
+
+fn is_startup_launch() -> bool {
+    std::env::args().any(|arg| arg == "--startup" || arg == "--autostart")
+}
+
+fn should_show_main_window_on_launch(settings: &AppSettings) -> bool {
+    if is_startup_launch() {
+        settings.startup_launch_mode == LaunchMode::Window
+    } else {
+        settings.manual_launch_mode == LaunchMode::Window
+    }
 }
 
 fn settings_path() -> io::Result<PathBuf> {
@@ -260,11 +308,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             create_tray(app)?;
-            if let Some(window) = app.get_webview_window(MAIN_LABEL) {
-                attach_main_window_events(window.clone());
-                position_main_window(&window);
-                let _ = window.show();
-                let _ = window.set_focus();
+            let settings = load_settings().unwrap_or_default();
+            if should_show_main_window_on_launch(&settings) {
+                show_main_window(app.handle());
             }
             Ok(())
         })
@@ -272,7 +318,8 @@ pub fn run() {
             dismiss_main_window,
             dismiss_after_launch,
             get_settings,
-            save_settings
+            save_settings,
+            close_settings_window
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");

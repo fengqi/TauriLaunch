@@ -46,6 +46,8 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 主窗口关闭不是普通隐藏，而是销毁 WebView 窗口。
 - 失焦销毁只针对主启动器窗口，不用于设置窗口和关于窗口。
 - 主窗口每次创建/显示时都会按设置中的右边距、下边距定位到屏幕右下角。
+- 开机启动通过 `--startup` 或 `--autostart` 参数识别，默认只启动到托盘。
+- 普通双击启动默认显示主窗口，可在设置中改为启动到托盘。
 - 托盘菜单 `退出` 才真正退出整个进程。
 - M1 中扫描和启动是真功能的占位入口，后续在 M2/M3 补齐。
 - 用户要求调整功能、交互、产品规则时，同步更新文档中的最终版本描述。
@@ -65,7 +67,9 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 ```json
 {
   "windowRightOffset": 10,
-  "windowBottomOffset": 10
+  "windowBottomOffset": 10,
+  "startupLaunchMode": "tray",
+  "manualLaunchMode": "window"
 }
 ```
 

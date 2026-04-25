@@ -338,9 +338,16 @@ button {
 
 .dialog-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 14px;
   padding-top: 14px;
+}
+
+.dialog-error {
+  margin-right: auto;
+  color: #b42318;
+  font-size: 14px;
 }
 
 .dialog-actions button {
