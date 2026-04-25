@@ -1,11 +1,11 @@
 use tauri::{
-    dpi::PhysicalPosition,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Manager, PhysicalPosition, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::PathBuf};
+use std::{fs, io, path::PathBuf, thread, time::Duration};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -182,6 +182,7 @@ fn show_aux_window(
 fn attach_main_window_events(window: WebviewWindow) {
     let close_window = window.clone();
     let was_focused = Arc::new(AtomicBool::new(false));
+    let focus_close_armed = Arc::new(AtomicBool::new(false));
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
@@ -189,9 +190,14 @@ fn attach_main_window_events(window: WebviewWindow) {
         }
         WindowEvent::Focused(true) => {
             was_focused.store(true, Ordering::Relaxed);
+            let focus_close_armed = focus_close_armed.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(800));
+                focus_close_armed.store(true, Ordering::Relaxed);
+            });
         }
         WindowEvent::Focused(false) => {
-            if was_focused.load(Ordering::Relaxed) {
+            if was_focused.load(Ordering::Relaxed) && focus_close_armed.load(Ordering::Relaxed) {
                 let _ = close_window.destroy();
             }
         }
