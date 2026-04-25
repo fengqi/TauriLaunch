@@ -148,8 +148,8 @@ fn show_main_window(app: &AppHandle) {
 
     match WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
         .title("应用列表")
-        .inner_size(1080.0, 620.0)
-        .min_inner_size(760.0, 420.0)
+        .inner_size(720.0, 470.0)
+        .min_inner_size(620.0, 360.0)
         .resizable(false)
         .decorations(false)
         .visible(false)
@@ -194,7 +194,7 @@ fn position_main_window(window: &WebviewWindow) {
 }
 
 fn show_settings_window(app: &AppHandle) {
-    show_aux_window(app, SETTINGS_LABEL, "设置", "index.html?view=settings", 900.0, 640.0);
+    show_aux_window(app, SETTINGS_LABEL, "设置", "index.html?view=settings", 500.0, 320.0);
 }
 
 fn show_about_window(app: &AppHandle) {

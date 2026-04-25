@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -11,6 +11,16 @@ type AppEntry = {
   launches: number;
   accent: string;
   initials: string;
+};
+
+type TooltipState = {
+  app: AppEntry;
+  anchor: {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  };
 };
 
 type LaunchMode = "tray" | "window";
@@ -32,6 +42,276 @@ const defaultSettings: AppSettings = {
 };
 
 const sampleApps: AppEntry[] = [
+  {
+    id: "steam",
+    name: "Steam",
+    path: "C:\\Program Files\\Steam\\Steam.exe",
+    launchArgs: "",
+    launches: 35,
+    accent: "#245b9f",
+    initials: "St",
+  },
+  {
+    id: "wechat",
+    name: "微信",
+    path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
+    launchArgs: "",
+    launches: 18,
+    accent: "#28c76f",
+    initials: "微",
+  },
+  {
+    id: "notepad2",
+    name: "Notepad2",
+    path: "C:\\Tools\\Notepad2\\Notepad2.exe",
+    launchArgs: "",
+    launches: 9,
+    accent: "#8bb8c8",
+    initials: "N2",
+  },
+  {
+    id: "uu",
+    name: "UU加速器",
+    path: "C:\\Program Files\\Netease\\UU\\uu.exe",
+    launchArgs: "",
+    launches: 4,
+    accent: "#06a6d8",
+    initials: "UU",
+  },
+  {
+    id: "kook",
+    name: "KOOK",
+    path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
+    launchArgs: "",
+    launches: 12,
+    accent: "#64d923",
+    initials: "K",
+  },
+  {
+    id: "vscode",
+    name: "VS Code",
+    path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    launchArgs: "--reuse-window",
+    launches: 41,
+    accent: "#2f80ed",
+    initials: "VS",
+  },
+  {
+    id: "everything",
+    name: "Everything",
+    path: "C:\\Program Files\\Everything\\Everything.exe",
+    launchArgs: "-startup",
+    launches: 28,
+    accent: "#ff8a00",
+    initials: "Ev",
+  },
+  {
+    id: "telegram",
+    name: "Telegram",
+    path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
+    launchArgs: "",
+    launches: 22,
+    accent: "#2aabee",
+    initials: "T",
+  },
+  {
+    id: "obs",
+    name: "OBS Studio",
+    path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
+    launchArgs: "",
+    launches: 7,
+    accent: "#303238",
+    initials: "OBS",
+  },
+  {
+    id: "potplayer",
+    name: "PotPlayer",
+    path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
+    launchArgs: "",
+    launches: 16,
+    accent: "#ffd400",
+    initials: "P",
+  },
+  {
+    id: "steam",
+    name: "Steam",
+    path: "C:\\Program Files\\Steam\\Steam.exe",
+    launchArgs: "",
+    launches: 35,
+    accent: "#245b9f",
+    initials: "St",
+  },
+  {
+    id: "wechat",
+    name: "微信",
+    path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
+    launchArgs: "",
+    launches: 18,
+    accent: "#28c76f",
+    initials: "微",
+  },
+  {
+    id: "notepad2",
+    name: "Notepad2",
+    path: "C:\\Tools\\Notepad2\\Notepad2.exe",
+    launchArgs: "",
+    launches: 9,
+    accent: "#8bb8c8",
+    initials: "N2",
+  },
+  {
+    id: "uu",
+    name: "UU加速器",
+    path: "C:\\Program Files\\Netease\\UU\\uu.exe",
+    launchArgs: "",
+    launches: 4,
+    accent: "#06a6d8",
+    initials: "UU",
+  },
+  {
+    id: "kook",
+    name: "KOOK",
+    path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
+    launchArgs: "",
+    launches: 12,
+    accent: "#64d923",
+    initials: "K",
+  },
+  {
+    id: "vscode",
+    name: "VS Code",
+    path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    launchArgs: "--reuse-window",
+    launches: 41,
+    accent: "#2f80ed",
+    initials: "VS",
+  },
+  {
+    id: "everything",
+    name: "Everything",
+    path: "C:\\Program Files\\Everything\\Everything.exe",
+    launchArgs: "-startup",
+    launches: 28,
+    accent: "#ff8a00",
+    initials: "Ev",
+  },
+  {
+    id: "telegram",
+    name: "Telegram",
+    path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
+    launchArgs: "",
+    launches: 22,
+    accent: "#2aabee",
+    initials: "T",
+  },
+  {
+    id: "obs",
+    name: "OBS Studio",
+    path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
+    launchArgs: "",
+    launches: 7,
+    accent: "#303238",
+    initials: "OBS",
+  },
+  {
+    id: "potplayer",
+    name: "PotPlayer",
+    path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
+    launchArgs: "",
+    launches: 16,
+    accent: "#ffd400",
+    initials: "P",
+  },
+  {
+    id: "steam",
+    name: "Steam",
+    path: "C:\\Program Files\\Steam\\Steam.exe",
+    launchArgs: "",
+    launches: 35,
+    accent: "#245b9f",
+    initials: "St",
+  },
+  {
+    id: "wechat",
+    name: "微信",
+    path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
+    launchArgs: "",
+    launches: 18,
+    accent: "#28c76f",
+    initials: "微",
+  },
+  {
+    id: "notepad2",
+    name: "Notepad2",
+    path: "C:\\Tools\\Notepad2\\Notepad2.exe",
+    launchArgs: "",
+    launches: 9,
+    accent: "#8bb8c8",
+    initials: "N2",
+  },
+  {
+    id: "uu",
+    name: "UU加速器",
+    path: "C:\\Program Files\\Netease\\UU\\uu.exe",
+    launchArgs: "",
+    launches: 4,
+    accent: "#06a6d8",
+    initials: "UU",
+  },
+  {
+    id: "kook",
+    name: "KOOK",
+    path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
+    launchArgs: "",
+    launches: 12,
+    accent: "#64d923",
+    initials: "K",
+  },
+  {
+    id: "vscode",
+    name: "VS Code",
+    path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    launchArgs: "--reuse-window",
+    launches: 41,
+    accent: "#2f80ed",
+    initials: "VS",
+  },
+  {
+    id: "everything",
+    name: "Everything",
+    path: "C:\\Program Files\\Everything\\Everything.exe",
+    launchArgs: "-startup",
+    launches: 28,
+    accent: "#ff8a00",
+    initials: "Ev",
+  },
+  {
+    id: "telegram",
+    name: "Telegram",
+    path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
+    launchArgs: "",
+    launches: 22,
+    accent: "#2aabee",
+    initials: "T",
+  },
+  {
+    id: "obs",
+    name: "OBS Studio",
+    path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
+    launchArgs: "",
+    launches: 7,
+    accent: "#303238",
+    initials: "OBS",
+  },
+  {
+    id: "potplayer",
+    name: "PotPlayer",
+    path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
+    launchArgs: "",
+    launches: 16,
+    accent: "#ffd400",
+    initials: "P",
+  },
   {
     id: "steam",
     name: "Steam",
@@ -154,6 +434,13 @@ function App() {
 
 function LauncherWindow() {
   const [query, setQuery] = useState("");
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({
+    left: 0,
+    top: 0,
+    visibility: "hidden",
+  });
+  const tooltipRef = useRef<HTMLDivElement>(null);
 
   const apps = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -168,6 +455,41 @@ function LauncherWindow() {
     );
   }, [query]);
 
+  useLayoutEffect(() => {
+    if (!tooltip || !tooltipRef.current) {
+      return;
+    }
+
+    const margin = 8;
+    const gap = 8;
+    const tooltipWidth = tooltipRef.current.offsetWidth;
+    const tooltipHeight = tooltipRef.current.offsetHeight;
+    let left = tooltip.anchor.right + gap;
+    let top = tooltip.anchor.bottom + gap;
+
+    if (left + tooltipWidth > window.innerWidth - margin) {
+      left = tooltip.anchor.left - tooltipWidth - gap;
+    }
+
+    if (left < margin) {
+      left = Math.max(margin, window.innerWidth - tooltipWidth - margin);
+    }
+
+    if (top + tooltipHeight > window.innerHeight - margin) {
+      top = tooltip.anchor.top - tooltipHeight - gap;
+    }
+
+    if (top < margin) {
+      top = margin;
+    }
+
+    setTooltipStyle({
+      left,
+      top,
+      visibility: "visible",
+    });
+  }, [tooltip]);
+
   async function closeMainWindow() {
     await invoke("dismiss_main_window");
   }
@@ -181,6 +503,31 @@ function LauncherWindow() {
       event.preventDefault();
       void launchApp(apps[0]);
     }
+  }
+
+  function showAppTooltip(
+    app: AppEntry,
+    event: MouseEvent<HTMLButtonElement> | FocusEvent<HTMLButtonElement>,
+  ) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setTooltipStyle({
+      left: 0,
+      top: 0,
+      visibility: "hidden",
+    });
+    setTooltip({
+      app,
+      anchor: {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+      },
+    });
+  }
+
+  function hideAppTooltip() {
+    setTooltip(null);
   }
 
   return (
@@ -226,25 +573,38 @@ function LauncherWindow() {
       </header>
 
       <section className="app-grid" aria-label="应用列表">
-        {apps.map((app) => (
+        {apps.map((app, index) => (
           <button
-            key={app.id}
+            key={`${app.id}-${index}`}
             type="button"
             className="app-tile"
             onDoubleClick={() => void launchApp(app)}
+            onMouseEnter={(event) => showAppTooltip(app, event)}
+            onMouseLeave={hideAppTooltip}
+            onFocus={(event) => showAppTooltip(app, event)}
+            onBlur={hideAppTooltip}
           >
             <span className="app-icon" style={{ background: app.accent }}>
               {app.initials}
             </span>
             <span className="app-name">{app.name}</span>
-            <span className="app-tooltip">
-              <span>启动次数: {app.launches}</span>
-              <span>路径: {app.path}</span>
-              <span>启动参数: {app.launchArgs || "无"}</span>
-            </span>
           </button>
         ))}
       </section>
+
+      {tooltip ? (
+        <div
+          ref={tooltipRef}
+          className="app-tooltip-floating"
+          style={tooltipStyle}
+        >
+          <span>启动次数: {tooltip.app.launches}</span>
+          <span>路径: {tooltip.app.path}</span>
+          {tooltip.app.launchArgs ? (
+            <span>启动参数: {tooltip.app.launchArgs}</span>
+          ) : null}
+        </div>
+      ) : null}
     </main>
   );
 }

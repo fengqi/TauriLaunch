@@ -19,6 +19,7 @@ body,
   width: 100%;
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 button,
@@ -32,8 +33,8 @@ button {
 }
 
 .launcher-shell {
-  width: 100vw;
-  min-height: 100vh;
+  width: 100%;
+  height: 100vh;
   overflow: hidden;
   background: #f8fafc;
   border: 1px solid #d7dce3;
@@ -42,8 +43,8 @@ button {
 }
 
 .launcher-header {
-  height: 76px;
-  padding: 0 20px 0 24px;
+  height: 42px;
+  padding: 0 9px 0 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -54,17 +55,17 @@ button {
 .title-block {
   display: flex;
   align-items: center;
-  gap: 14px;
-  font-size: 24px;
+  gap: 7px;
+  font-size: 14px;
   font-weight: 650;
 }
 
 .app-mark {
-  width: 26px;
-  height: 26px;
+  width: 16px;
+  height: 16px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
+  gap: 3px;
 }
 
 .app-mark span {
@@ -75,16 +76,16 @@ button {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 6px;
 }
 
 .search-box {
-  width: 300px;
-  height: 44px;
+  width: 190px;
+  height: 28px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 14px;
+  gap: 6px;
+  padding: 0 8px;
   border: 1px solid #d6dce4;
   border-radius: 8px;
   background: #fff;
@@ -92,7 +93,7 @@ button {
 
 .search-box span {
   color: #6f7782;
-  font-size: 22px;
+  font-size: 16px;
 }
 
 .search-box input {
@@ -104,17 +105,17 @@ button {
 }
 
 .toolbar-button {
-  height: 44px;
-  min-width: 108px;
-  padding: 0 18px;
+  height: 28px;
+  min-width: 62px;
+  padding: 0 8px;
   border: 1px solid #d6dce4;
-  border-radius: 8px;
+  border-radius: 6px;
   color: #1f2328;
   background: #fff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 5px;
 }
 
 .toolbar-button:hover,
@@ -125,21 +126,36 @@ button {
 
 .toolbar-button span {
   color: #2563eb;
-  font-size: 22px;
+  font-size: 15px;
   line-height: 1;
 }
 
 .app-grid {
-  padding: 24px;
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(132px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.app-grid::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .app-tile {
   position: relative;
-  min-height: 132px;
-  padding: 18px 12px 14px;
+  min-width: 0;
+  min-height: 92px;
+  padding: 10px 8px 8px;
   border: 1px solid #e1e6ec;
   border-radius: 8px;
   background: #fff;
@@ -148,27 +164,28 @@ button {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 7px;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
 .app-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
   color: #fff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   box-shadow: inset 0 -10px 18px rgba(0, 0, 0, 0.12);
 }
 
 .app-name {
   width: 100%;
-  min-height: 40px;
-  line-height: 20px;
+  min-height: 32px;
+  line-height: 16px;
+  font-size: 13px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -176,34 +193,34 @@ button {
   overflow-wrap: anywhere;
 }
 
-.app-tooltip {
-  position: absolute;
-  left: 72%;
-  top: 78px;
-  z-index: 5;
-  min-width: 312px;
-  padding: 12px 14px;
+.app-tooltip-floating {
+  position: fixed;
+  z-index: 100;
+  min-width: 300px;
+  max-width: min(400px, calc(100vw - 16px));
+  padding: 10px 12px;
   border: 1px solid #d7dce3;
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
   color: #2f3742;
   text-align: left;
-  display: none;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.app-tile:hover .app-tooltip {
   display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+  pointer-events: none;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .settings-shell {
   min-height: 100vh;
-  padding: 10px 22px 18px;
+  padding: 4px 8px 8px;
   background: #f7f8fa;
   display: flex;
   flex-direction: column;
+  font-size: 13px;
 }
 
 .dialog-title {
@@ -221,19 +238,19 @@ button {
 
 .tabs {
   display: flex;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 2px;
+  padding: 0 2px;
   border-bottom: 1px solid #dfe4ea;
 }
 
 .tab {
-  height: 44px;
-  padding: 0 18px;
+  height: 28px;
+  padding: 0 9px;
   border: 0;
   border-bottom: 3px solid transparent;
   background: transparent;
   color: #20262e;
-  font-size: 17px;
+  font-size: 13px;
 }
 
 .tab.active {
@@ -243,7 +260,7 @@ button {
 
 .settings-panel {
   flex: 1;
-  padding: 18px 0;
+  padding: 6px 0;
   border: 1px solid #dfe4ea;
   border-top: 0;
   background: #fff;
@@ -251,11 +268,10 @@ button {
 
 .settings-section {
   display: grid;
-  grid-template-columns: 180px 1fr;
-  column-gap: 30px;
-  padding: 0 24px 20px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid #eef1f4;
+  grid-template-columns: 1fr;
+  padding: 0 8px 6px;
+  margin-bottom: 6px;
+  border-bottom: 0;
 }
 
 .settings-section:last-child {
@@ -264,68 +280,62 @@ button {
 }
 
 .settings-section h2 {
-  margin: 8px 0 0;
-  font-size: 17px;
-  font-weight: 600;
+  display: none;
 }
 
 .directory-list {
-  min-height: 132px;
-  padding: 12px 14px;
+  min-height: 74px;
+  padding: 5px 7px;
   border: 1px solid #cfd6df;
   border-radius: 6px;
-  line-height: 28px;
+  line-height: 20px;
   background: #fff;
 }
 
 .directory-actions {
-  grid-column: 2;
   display: grid;
-  grid-template-columns: 1fr 92px 92px 92px;
-  gap: 12px;
-  margin-top: 12px;
+  grid-template-columns: 1fr 58px 58px 58px;
+  gap: 5px;
+  margin-top: 6px;
 }
 
 .settings-shell input,
 .settings-shell select,
 .settings-shell button {
-  min-height: 36px;
+  min-height: 24px;
   border: 1px solid #cfd6df;
   border-radius: 6px;
   background: #fff;
   color: #1f2328;
+  font-size: 13px;
 }
 
 .settings-shell button {
-  padding: 0 18px;
+  padding: 0 10px;
 }
 
 .settings-shell input,
 .settings-shell select {
-  padding: 0 10px;
+  padding: 0 7px;
 }
 
 .compact-row label,
 .form-grid label {
   display: grid;
-  grid-template-columns: 240px 190px;
+  grid-template-columns: 178px 136px;
   align-items: center;
-  gap: 16px;
-  min-height: 42px;
+  gap: 10px;
+  min-height: 28px;
 }
 
 .form-grid {
-  row-gap: 8px;
-}
-
-.form-grid label {
-  grid-column: 2;
+  row-gap: 4px;
 }
 
 .checkbox-row input {
-  width: 18px;
-  height: 18px;
-  min-height: 18px;
+  width: 14px;
+  height: 14px;
+  min-height: 14px;
   accent-color: #2563eb;
 }
 
@@ -333,8 +343,8 @@ button {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 14px;
-  padding-top: 14px;
+  gap: 8px;
+  padding-top: 6px;
 }
 
 .dialog-error {
@@ -344,8 +354,8 @@ button {
 }
 
 .dialog-actions button {
-  min-width: 104px;
-  height: 40px;
+  min-width: 72px;
+  height: 28px;
   border: 1px solid #cfd6df;
   border-radius: 7px;
   background: #fff;
@@ -394,7 +404,7 @@ button {
 }
 
 .tabs .tab {
-  min-height: 44px;
+  min-height: 28px;
   border: 0;
   border-bottom: 3px solid transparent;
   border-radius: 0;
