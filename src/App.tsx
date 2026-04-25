@@ -221,7 +221,6 @@ function LauncherWindow() {
             type="button"
             className="app-tile"
             onDoubleClick={() => void launchApp(app)}
-            title={`启动次数: ${app.launches}\n路径: ${app.path}`}
           >
             <span className="app-icon" style={{ background: app.accent }}>
               {app.initials}
