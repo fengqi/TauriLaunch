@@ -399,3 +399,29 @@ button {
 .muted {
   color: #6b7280;
 }
+
+.tabs .tab {
+  min-height: 44px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+}
+
+.tabs .tab:hover {
+  background: #eef6ff;
+}
+
+.tabs .tab.active {
+  border-bottom-color: #2563eb;
+  color: #111827;
+  font-weight: 650;
+}
+
+.info-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+  color: #374151;
+}

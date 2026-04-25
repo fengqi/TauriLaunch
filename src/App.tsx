@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -11,12 +12,16 @@ type AppEntry = {
   initials: string;
 };
 
+type LaunchMode = "tray" | "window";
+
 type AppSettings = {
   windowRightOffset: number;
   windowBottomOffset: number;
-  startupLaunchMode: "tray" | "window";
-  manualLaunchMode: "tray" | "window";
+  startupLaunchMode: LaunchMode;
+  manualLaunchMode: LaunchMode;
 };
+
+type SettingsTab = "directories" | "icons" | "interface" | "other" | "info";
 
 const defaultSettings: AppSettings = {
   windowRightOffset: 10,
@@ -114,6 +119,14 @@ const directories = [
   "C:\\Users\\fengqi\\Desktop\\SingleExe",
 ];
 
+const settingsTabs: { id: SettingsTab; label: string }[] = [
+  { id: "directories", label: "目录监听" },
+  { id: "icons", label: "图标设置" },
+  { id: "interface", label: "界面设置" },
+  { id: "other", label: "其他设置" },
+  { id: "info", label: "信息" },
+];
+
 function App() {
   const view = new URLSearchParams(window.location.search).get("view") ?? "main";
 
@@ -152,10 +165,10 @@ function LauncherWindow() {
     await invoke("dismiss_after_launch", { appName: app.name });
   }
 
-  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter" && apps.length > 0) {
       event.preventDefault();
-      launchApp(apps[0]);
+      void launchApp(apps[0]);
     }
   }
 
@@ -178,7 +191,7 @@ function LauncherWindow() {
         </div>
         <div className="toolbar">
           <label className="search-box">
-            <span aria-hidden="true">⌕</span>
+            <span aria-hidden="true">🔍</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
@@ -207,7 +220,7 @@ function LauncherWindow() {
             key={app.id}
             type="button"
             className="app-tile"
-            onDoubleClick={() => launchApp(app)}
+            onDoubleClick={() => void launchApp(app)}
             title={`启动次数: ${app.launches}\n路径: ${app.path}`}
           >
             <span className="app-icon" style={{ background: app.accent }}>
@@ -227,6 +240,7 @@ function LauncherWindow() {
 
 function SettingsWindow() {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("directories");
   const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
@@ -251,6 +265,7 @@ function SettingsWindow() {
 
   async function saveAndClose() {
     try {
+      setSaveError("");
       await invoke("save_settings", { settings });
       await invoke("close_settings_window");
     } catch (error) {
@@ -262,34 +277,33 @@ function SettingsWindow() {
     await invoke("close_settings_window");
   }
 
-  function updateSetting(name: keyof AppSettings, value: string) {
+  function updateNumberSetting(
+    name: "windowRightOffset" | "windowBottomOffset",
+    value: string,
+  ) {
     setSettings((current) => ({
       ...current,
-      [name]:
-        name === "windowRightOffset" || name === "windowBottomOffset"
-          ? Math.max(0, Number.parseInt(value, 10) || 0)
-          : value,
+      [name]: Math.max(0, Number.parseInt(value, 10) || 0),
     }));
   }
 
-  return (
-    <main className="settings-shell">
-      <header className="dialog-title">
-        <span className="gear" aria-hidden="true">
-          ⚙
-        </span>
-        <span>设置</span>
-      </header>
+  function updateLaunchMode(
+    name: "startupLaunchMode" | "manualLaunchMode",
+    value: string,
+  ) {
+    if (value !== "tray" && value !== "window") {
+      return;
+    }
 
-      <nav className="tabs" aria-label="设置页签">
-        <button className="tab active">目录监听</button>
-        <button className="tab">图标设置</button>
-        <button className="tab">界面设置</button>
-        <button className="tab">其他设置</button>
-        <button className="tab">信息</button>
-      </nav>
+    setSettings((current) => ({
+      ...current,
+      [name]: value,
+    }));
+  }
 
-      <section className="settings-panel">
+  function renderSettingsPanel() {
+    if (activeTab === "directories") {
+      return (
         <div className="settings-section directory-section">
           <h2>目录监听</h2>
           <div className="directory-list">
@@ -299,12 +313,16 @@ function SettingsWindow() {
           </div>
           <div className="directory-actions">
             <input aria-label="目录路径" />
-            <button>浏览</button>
-            <button>添加</button>
-            <button>删除</button>
+            <button type="button">浏览</button>
+            <button type="button">添加</button>
+            <button type="button">删除</button>
           </div>
         </div>
+      );
+    }
 
+    if (activeTab === "icons") {
+      return (
         <div className="settings-section compact-row">
           <h2>图标设置</h2>
           <label>
@@ -316,7 +334,11 @@ function SettingsWindow() {
             </select>
           </label>
         </div>
+      );
+    }
 
+    if (activeTab === "interface") {
+      return (
         <div className="settings-section form-grid">
           <h2>界面设置</h2>
           <label>
@@ -326,7 +348,10 @@ function SettingsWindow() {
               min={0}
               value={settings.windowRightOffset}
               onChange={(event) =>
-                updateSetting("windowRightOffset", event.currentTarget.value)
+                updateNumberSetting(
+                  "windowRightOffset",
+                  event.currentTarget.value,
+                )
               }
             />
           </label>
@@ -337,7 +362,10 @@ function SettingsWindow() {
               min={0}
               value={settings.windowBottomOffset}
               onChange={(event) =>
-                updateSetting("windowBottomOffset", event.currentTarget.value)
+                updateNumberSetting(
+                  "windowBottomOffset",
+                  event.currentTarget.value,
+                )
               }
             />
           </label>
@@ -354,7 +382,11 @@ function SettingsWindow() {
             <input type="checkbox" defaultChecked />
           </label>
         </div>
+      );
+    }
 
+    if (activeTab === "other") {
+      return (
         <div className="settings-section form-grid">
           <h2>其他设置</h2>
           <label>
@@ -362,7 +394,7 @@ function SettingsWindow() {
             <select
               value={settings.startupLaunchMode}
               onChange={(event) =>
-                updateSetting("startupLaunchMode", event.currentTarget.value)
+                updateLaunchMode("startupLaunchMode", event.currentTarget.value)
               }
             >
               <option value="tray">启动到托盘</option>
@@ -374,7 +406,7 @@ function SettingsWindow() {
             <select
               value={settings.manualLaunchMode}
               onChange={(event) =>
-                updateSetting("manualLaunchMode", event.currentTarget.value)
+                updateLaunchMode("manualLaunchMode", event.currentTarget.value)
               }
             >
               <option value="tray">启动到托盘</option>
@@ -390,14 +422,55 @@ function SettingsWindow() {
             <input type="checkbox" defaultChecked />
           </label>
         </div>
-      </section>
+      );
+    }
+
+    return (
+      <div className="settings-section info-section">
+        <h2>信息</h2>
+        <div className="info-content">
+          <strong>TauriLaunch</strong>
+          <span>版本 0.1.0</span>
+          <span>Windows 软件启动器</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <main className="settings-shell">
+      <header className="dialog-title">
+        <span className="gear" aria-hidden="true">
+          ⚙
+        </span>
+        <span>设置</span>
+      </header>
+
+      <nav className="tabs" aria-label="设置页签" role="tablist">
+        {settingsTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`tab${activeTab === tab.id ? " active" : ""}`}
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      <section className="settings-panel">{renderSettingsPanel()}</section>
 
       <footer className="dialog-actions">
         {saveError ? <span className="dialog-error">{saveError}</span> : null}
-        <button className="primary" onClick={saveAndClose}>
+        <button type="button" className="primary" onClick={saveAndClose}>
           确定
         </button>
-        <button onClick={closeSettings}>取消</button>
+        <button type="button" onClick={closeSettings}>
+          取消
+        </button>
       </footer>
     </main>
   );
