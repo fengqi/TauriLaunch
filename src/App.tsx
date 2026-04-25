@@ -7,6 +7,7 @@ type AppEntry = {
   id: string;
   name: string;
   path: string;
+  launchArgs: string;
   launches: number;
   accent: string;
   initials: string;
@@ -35,6 +36,7 @@ const sampleApps: AppEntry[] = [
     id: "steam",
     name: "Steam",
     path: "C:\\Program Files\\Steam\\Steam.exe",
+    launchArgs: "",
     launches: 35,
     accent: "#245b9f",
     initials: "St",
@@ -43,6 +45,7 @@ const sampleApps: AppEntry[] = [
     id: "wechat",
     name: "微信",
     path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
+    launchArgs: "",
     launches: 18,
     accent: "#28c76f",
     initials: "微",
@@ -51,6 +54,7 @@ const sampleApps: AppEntry[] = [
     id: "notepad2",
     name: "Notepad2",
     path: "C:\\Tools\\Notepad2\\Notepad2.exe",
+    launchArgs: "",
     launches: 9,
     accent: "#8bb8c8",
     initials: "N2",
@@ -59,6 +63,7 @@ const sampleApps: AppEntry[] = [
     id: "uu",
     name: "UU加速器",
     path: "C:\\Program Files\\Netease\\UU\\uu.exe",
+    launchArgs: "",
     launches: 4,
     accent: "#06a6d8",
     initials: "UU",
@@ -67,6 +72,7 @@ const sampleApps: AppEntry[] = [
     id: "kook",
     name: "KOOK",
     path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
+    launchArgs: "",
     launches: 12,
     accent: "#64d923",
     initials: "K",
@@ -75,6 +81,7 @@ const sampleApps: AppEntry[] = [
     id: "vscode",
     name: "VS Code",
     path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    launchArgs: "--reuse-window",
     launches: 41,
     accent: "#2f80ed",
     initials: "VS",
@@ -83,6 +90,7 @@ const sampleApps: AppEntry[] = [
     id: "everything",
     name: "Everything",
     path: "C:\\Program Files\\Everything\\Everything.exe",
+    launchArgs: "-startup",
     launches: 28,
     accent: "#ff8a00",
     initials: "Ev",
@@ -91,6 +99,7 @@ const sampleApps: AppEntry[] = [
     id: "telegram",
     name: "Telegram",
     path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
+    launchArgs: "",
     launches: 22,
     accent: "#2aabee",
     initials: "T",
@@ -99,6 +108,7 @@ const sampleApps: AppEntry[] = [
     id: "obs",
     name: "OBS Studio",
     path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
+    launchArgs: "",
     launches: 7,
     accent: "#303238",
     initials: "OBS",
@@ -107,6 +117,7 @@ const sampleApps: AppEntry[] = [
     id: "potplayer",
     name: "PotPlayer",
     path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
+    launchArgs: "",
     launches: 16,
     accent: "#ffd400",
     initials: "P",
@@ -229,6 +240,7 @@ function LauncherWindow() {
             <span className="app-tooltip">
               <span>启动次数: {app.launches}</span>
               <span>路径: {app.path}</span>
+              <span>启动参数: {app.launchArgs || "无"}</span>
             </span>
           </button>
         ))}
@@ -438,13 +450,6 @@ function SettingsWindow() {
 
   return (
     <main className="settings-shell">
-      <header className="dialog-title">
-        <span className="gear" aria-hidden="true">
-          ⚙
-        </span>
-        <span>设置</span>
-      </header>
-
       <nav className="tabs" aria-label="设置页签" role="tablist">
         {settingsTabs.map((tab) => (
           <button

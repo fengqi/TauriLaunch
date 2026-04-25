@@ -151,7 +151,7 @@ fn show_main_window(app: &AppHandle) {
         .inner_size(1080.0, 620.0)
         .min_inner_size(760.0, 420.0)
         .resizable(false)
-        .decorations(true)
+        .decorations(false)
         .visible(false)
         .build()
     {
