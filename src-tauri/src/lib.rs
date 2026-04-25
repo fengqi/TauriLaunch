@@ -151,9 +151,18 @@ fn dismiss_webview_window(window: &WebviewWindow) {
     }
 }
 
+fn destroy_retained_windows(app: &AppHandle) {
+    for label in [MAIN_LABEL, SETTINGS_LABEL] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.destroy();
+        }
+    }
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_LABEL) {
         position_main_window(&window);
+        let _ = window.set_skip_taskbar(true);
         let _ = window.show();
         let _ = window.set_focus();
         return;
@@ -165,6 +174,7 @@ fn show_main_window(app: &AppHandle) {
         .min_inner_size(620.0, 360.0)
         .resizable(false)
         .decorations(false)
+        .skip_taskbar(true)
         .visible(false)
         .build()
     {
@@ -224,6 +234,7 @@ fn show_aux_window(
 ) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.center();
+        let _ = window.set_skip_taskbar(true);
         let _ = window.show();
         let _ = window.set_focus();
         return;
@@ -234,6 +245,7 @@ fn show_aux_window(
         .inner_size(width, height)
         .resizable(false)
         .decorations(true)
+        .skip_taskbar(true)
         .center()
         .build()
     {
@@ -249,7 +261,6 @@ fn show_aux_window(
 fn attach_main_window_events(window: WebviewWindow) {
     let close_window = window.clone();
     let was_focused = Arc::new(AtomicBool::new(false));
-    let focus_close_armed = Arc::new(AtomicBool::new(false));
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
@@ -257,16 +268,19 @@ fn attach_main_window_events(window: WebviewWindow) {
         }
         WindowEvent::Focused(true) => {
             was_focused.store(true, Ordering::Relaxed);
-            let focus_close_armed = focus_close_armed.clone();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(800));
-                focus_close_armed.store(true, Ordering::Relaxed);
-            });
         }
         WindowEvent::Focused(false) => {
-            if was_focused.load(Ordering::Relaxed) && focus_close_armed.load(Ordering::Relaxed) {
-                dismiss_webview_window(&close_window);
-            }
+            let close_window = close_window.clone();
+            let was_focused = was_focused.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(120));
+                if was_focused.load(Ordering::Relaxed)
+                    && !close_window.is_focused().unwrap_or(false)
+                    && close_window.is_visible().unwrap_or(false)
+                {
+                    dismiss_webview_window(&close_window);
+                }
+            });
         }
         _ => {}
     });
@@ -309,6 +323,9 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
             "lightweight" => {
                 let checked = lightweight_for_event.is_checked().unwrap_or(false);
                 LIGHTWEIGHT_MODE.store(checked, Ordering::Relaxed);
+                if checked {
+                    destroy_retained_windows(app);
+                }
             }
             "quit" => app.exit(0),
             _ => {}
