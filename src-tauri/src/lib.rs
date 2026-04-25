@@ -1,5 +1,5 @@
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, PhysicalPosition, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent,
@@ -16,6 +16,7 @@ const SETTINGS_LABEL: &str = "settings";
 const ABOUT_LABEL: &str = "about";
 const DEFAULT_RIGHT_OFFSET: i32 = 10;
 const DEFAULT_BOTTOM_OFFSET: i32 = 10;
+static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,18 +77,18 @@ fn save_settings(settings: AppSettings) -> Result<(), String> {
 
 #[tauri::command]
 fn dismiss_main_window(app: AppHandle) {
-    destroy_window(&app, MAIN_LABEL);
+    dismiss_window(&app, MAIN_LABEL);
 }
 
 #[tauri::command]
 fn dismiss_after_launch(app: AppHandle, app_name: String) {
     println!("launch placeholder: {app_name}");
-    destroy_window(&app, MAIN_LABEL);
+    dismiss_window(&app, MAIN_LABEL);
 }
 
 #[tauri::command]
 fn close_settings_window(app: AppHandle) {
-    destroy_window(&app, SETTINGS_LABEL);
+    dismiss_window(&app, SETTINGS_LABEL);
 }
 
 fn is_startup_launch() -> bool {
@@ -132,9 +133,21 @@ fn store_settings(settings: &AppSettings) -> io::Result<()> {
     fs::write(path, content)
 }
 
-fn destroy_window(app: &AppHandle, label: &str) {
+fn lightweight_mode_enabled() -> bool {
+    LIGHTWEIGHT_MODE.load(Ordering::Relaxed)
+}
+
+fn dismiss_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
+        dismiss_webview_window(&window);
+    }
+}
+
+fn dismiss_webview_window(window: &WebviewWindow) {
+    if lightweight_mode_enabled() {
         let _ = window.destroy();
+    } else {
+        let _ = window.hide();
     }
 }
 
@@ -225,7 +238,7 @@ fn show_aux_window(
         .build()
     {
         Ok(window) => {
-            attach_destroy_on_close(window.clone());
+            attach_aux_window_events(window.clone(), label == SETTINGS_LABEL);
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -240,7 +253,7 @@ fn attach_main_window_events(window: WebviewWindow) {
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
-            let _ = close_window.destroy();
+            dismiss_webview_window(&close_window);
         }
         WindowEvent::Focused(true) => {
             was_focused.store(true, Ordering::Relaxed);
@@ -252,19 +265,23 @@ fn attach_main_window_events(window: WebviewWindow) {
         }
         WindowEvent::Focused(false) => {
             if was_focused.load(Ordering::Relaxed) && focus_close_armed.load(Ordering::Relaxed) {
-                let _ = close_window.destroy();
+                dismiss_webview_window(&close_window);
             }
         }
         _ => {}
     });
 }
 
-fn attach_destroy_on_close(window: WebviewWindow) {
+fn attach_aux_window_events(window: WebviewWindow, use_lightweight_mode: bool) {
     let close_window = window.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
-            let _ = close_window.destroy();
+            if use_lightweight_mode {
+                dismiss_webview_window(&close_window);
+            } else {
+                let _ = close_window.destroy();
+            }
         }
     });
 }
@@ -274,18 +291,25 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
     let scan = MenuItem::with_id(app, "scan", "扫描", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&about, &scan, &settings, &quit])?;
+    let lightweight =
+        CheckMenuItem::with_id(app, "lightweight", "轻量模式", true, false, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&about, &scan, &settings, &lightweight, &quit])?;
+    let lightweight_for_event = lightweight.clone();
 
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip("TauriLaunch")
-        .on_menu_event(|app, event| match event.id.as_ref() {
+        .on_menu_event(move |app, event| match event.id.as_ref() {
             "about" => show_about_window(app),
             "scan" => {
                 println!("scan placeholder");
             }
             "settings" => show_settings_window(app),
+            "lightweight" => {
+                let checked = lightweight_for_event.is_checked().unwrap_or(false);
+                LIGHTWEIGHT_MODE.store(checked, Ordering::Relaxed);
+            }
             "quit" => app.exit(0),
             _ => {}
         })
