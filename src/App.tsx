@@ -89,7 +89,7 @@ const sampleApps: AppEntry[] = [
   },
   {
     id: "vscode",
-    name: "VS Code",
+    name: "Visual Studio Code",
     path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
     launchArgs: "--reuse-window",
     launches: 41,
@@ -116,7 +116,7 @@ const sampleApps: AppEntry[] = [
   },
   {
     id: "obs",
-    name: "OBS Studio",
+    name: "Neat Download Manager",
     path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
     launchArgs: "",
     launches: 7,
@@ -125,7 +125,7 @@ const sampleApps: AppEntry[] = [
   },
   {
     id: "potplayer",
-    name: "PotPlayer",
+    name: "Driver Store Explorer",
     path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
     launchArgs: "",
     launches: 16,
@@ -134,7 +134,7 @@ const sampleApps: AppEntry[] = [
   },
   {
     id: "steam",
-    name: "Steam",
+    name: "Kingdom Come - Deliverance II",
     path: "C:\\Program Files\\Steam\\Steam.exe",
     launchArgs: "",
     launches: 35,
