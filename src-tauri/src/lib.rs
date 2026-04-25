@@ -210,6 +210,7 @@ fn show_aux_window(
     height: f64,
 ) {
     if let Some(window) = app.get_webview_window(label) {
+        let _ = window.center();
         let _ = window.show();
         let _ = window.set_focus();
         return;
@@ -220,9 +221,14 @@ fn show_aux_window(
         .inner_size(width, height)
         .resizable(false)
         .decorations(true)
+        .center()
         .build()
     {
-        Ok(window) => attach_destroy_on_close(window),
+        Ok(window) => {
+            attach_destroy_on_close(window.clone());
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
         Err(error) => eprintln!("failed to create {label} window: {error}"),
     }
 }
