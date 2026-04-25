@@ -1,0 +1,281 @@
+use tauri::{
+    dpi::PhysicalPosition,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
+use serde::{Deserialize, Serialize};
+use std::{fs, io, path::PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+const MAIN_LABEL: &str = "main";
+const SETTINGS_LABEL: &str = "settings";
+const ABOUT_LABEL: &str = "about";
+const DEFAULT_RIGHT_OFFSET: i32 = 10;
+const DEFAULT_BOTTOM_OFFSET: i32 = 10;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSettings {
+    window_right_offset: i32,
+    window_bottom_offset: i32,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            window_right_offset: DEFAULT_RIGHT_OFFSET,
+            window_bottom_offset: DEFAULT_BOTTOM_OFFSET,
+        }
+    }
+}
+
+#[tauri::command]
+fn get_settings() -> AppSettings {
+    load_settings().unwrap_or_default()
+}
+
+#[tauri::command]
+fn save_settings(settings: AppSettings) -> Result<(), String> {
+    store_settings(&settings).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn dismiss_main_window(app: AppHandle) {
+    destroy_window(&app, MAIN_LABEL);
+}
+
+#[tauri::command]
+fn dismiss_after_launch(app: AppHandle, app_name: String) {
+    println!("launch placeholder: {app_name}");
+    destroy_window(&app, MAIN_LABEL);
+}
+
+fn settings_path() -> io::Result<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is not set"))?;
+
+    Ok(PathBuf::from(local_app_data)
+        .join("com.fengqi.taurilaunch")
+        .join("settings.json"))
+}
+
+fn load_settings() -> io::Result<AppSettings> {
+    let path = settings_path()?;
+    if !path.exists() {
+        return Ok(AppSettings::default());
+    }
+
+    let content = fs::read_to_string(path)?;
+    let settings = serde_json::from_str(&content).unwrap_or_default();
+    Ok(settings)
+}
+
+fn store_settings(settings: &AppSettings) -> io::Result<()> {
+    let path = settings_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let content = serde_json::to_string_pretty(settings)?;
+    fs::write(path, content)
+}
+
+fn destroy_window(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.destroy();
+    }
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+        position_main_window(&window);
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    match WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
+        .title("应用列表")
+        .inner_size(1080.0, 620.0)
+        .min_inner_size(760.0, 420.0)
+        .resizable(false)
+        .decorations(true)
+        .visible(false)
+        .build()
+    {
+        Ok(window) => {
+            attach_main_window_events(window.clone());
+            position_main_window(&window);
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Err(error) => eprintln!("failed to create main window: {error}"),
+    }
+}
+
+fn position_main_window(window: &WebviewWindow) {
+    let settings = load_settings().unwrap_or_default();
+    let Some(monitor) = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+    else {
+        return;
+    };
+
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+
+    let work_area = monitor.work_area();
+    let x = work_area.position.x
+        + work_area.size.width as i32
+        - size.width as i32
+        - settings.window_right_offset.max(0);
+    let y = work_area.position.y
+        + work_area.size.height as i32
+        - size.height as i32
+        - settings.window_bottom_offset.max(0);
+
+    let _ = window.set_position(PhysicalPosition::new(x, y));
+}
+
+fn show_settings_window(app: &AppHandle) {
+    show_aux_window(app, SETTINGS_LABEL, "设置", "index.html?view=settings", 900.0, 640.0);
+}
+
+fn show_about_window(app: &AppHandle) {
+    show_aux_window(app, ABOUT_LABEL, "关于", "index.html?view=about", 360.0, 260.0);
+}
+
+fn show_aux_window(
+    app: &AppHandle,
+    label: &str,
+    title: &str,
+    url: &str,
+    width: f64,
+    height: f64,
+) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    match WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(width, height)
+        .resizable(false)
+        .decorations(true)
+        .build()
+    {
+        Ok(window) => attach_destroy_on_close(window),
+        Err(error) => eprintln!("failed to create {label} window: {error}"),
+    }
+}
+
+fn attach_main_window_events(window: WebviewWindow) {
+    let close_window = window.clone();
+    let was_focused = Arc::new(AtomicBool::new(false));
+    window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = close_window.destroy();
+        }
+        WindowEvent::Focused(true) => {
+            was_focused.store(true, Ordering::Relaxed);
+        }
+        WindowEvent::Focused(false) => {
+            if was_focused.load(Ordering::Relaxed) {
+                let _ = close_window.destroy();
+            }
+        }
+        _ => {}
+    });
+}
+
+fn attach_destroy_on_close(window: WebviewWindow) {
+    let close_window = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = close_window.destroy();
+        }
+    });
+}
+
+fn create_tray(app: &tauri::App) -> tauri::Result<()> {
+    let about = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
+    let scan = MenuItem::with_id(app, "scan", "扫描", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&about, &scan, &settings, &quit])?;
+
+    let mut tray = TrayIconBuilder::with_id("main-tray")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("TauriLaunch")
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "about" => show_about_window(app),
+            "scan" => {
+                println!("scan placeholder");
+            }
+            "settings" => show_settings_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+
+    tray.build(app)?;
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            create_tray(app)?;
+            if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+                attach_main_window_events(window.clone());
+                position_main_window(&window);
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            dismiss_main_window,
+            dismiss_after_launch,
+            get_settings,
+            save_settings
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application");
+
+    app.run(|_app, event| {
+        if let RunEvent::ExitRequested { code, api, .. } = event {
+            if code.is_none() {
+                api.prevent_exit();
+            }
+        }
+    });
+}

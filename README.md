@@ -1,0 +1,20 @@
+# TauriLaunch
+
+Windows 软件启动器，基于 Tauri v2、React 和 TypeScript。
+
+## 文档入口
+
+- 产品计划：`docs/PRODUCT_PLAN.md`
+- 决策记录：`docs/DECISIONS.md`
+- 开发说明：`docs/DEV_NOTES.md`
+- 设计图：`docs/design/`
+
+## 开发命令
+
+```powershell
+npm install
+npm run tauri dev
+npm run tauri build
+```
+
+当前 M1 已完成基础窗口、设置界面、托盘菜单和主窗口销毁/重建骨架。扫描、图标缓存和启动统计在后续阶段实现。
