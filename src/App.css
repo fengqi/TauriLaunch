@@ -199,7 +199,6 @@ button {
   gap: 4px;
 }
 
-.app-tile:first-child .app-tooltip,
 .app-tile:hover .app-tooltip {
   display: flex;
 }
