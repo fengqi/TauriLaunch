@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from "react";
 import "./App.css";
 
@@ -13,6 +13,7 @@ type AppEntry = {
   launches: number;
   accent: string;
   initials: string;
+  searchText: string;
   source: string;
 };
 
@@ -75,6 +76,7 @@ function App() {
 function LauncherWindow() {
   const [query, setQuery] = useState("");
   const [apps, setApps] = useState<AppEntry[]>([]);
+  const [filteredApps, setFilteredApps] = useState<AppEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
@@ -85,20 +87,6 @@ function LauncherWindow() {
   });
   const tooltipRef = useRef<HTMLDivElement>(null);
 
-  const filteredApps = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
-    if (!keyword) {
-      return apps;
-    }
-
-    return apps.filter(
-      (app) =>
-        app.name.toLowerCase().includes(keyword) ||
-        app.path.toLowerCase().includes(keyword) ||
-        app.launchArgs.toLowerCase().includes(keyword),
-    );
-  }, [apps, query]);
-
   useEffect(() => {
     let canceled = false;
 
@@ -106,6 +94,7 @@ function LauncherWindow() {
       .then((loadedApps) => {
         if (!canceled) {
           setApps(loadedApps);
+          setFilteredApps(loadedApps);
           setError("");
         }
       })
@@ -122,7 +111,7 @@ function LauncherWindow() {
 
     const unlisten = listen<AppEntry[]>("apps-updated", (event) => {
       setApps(event.payload);
-      setError("");
+      setFilteredApps(event.payload);
       setLoading(false);
     });
 
@@ -131,6 +120,38 @@ function LauncherWindow() {
       void unlisten.then((dispose) => dispose());
     };
   }, []);
+
+  useEffect(() => {
+    let canceled = false;
+    const keyword = query.trim();
+
+    if (!keyword) {
+      setFilteredApps(apps);
+      return () => {
+        canceled = true;
+      };
+    }
+
+    const timer = window.setTimeout(() => {
+      invoke<AppEntry[]>("search_apps", { query: keyword })
+        .then((result) => {
+          if (!canceled) {
+            setFilteredApps(result);
+            setError("");
+          }
+        })
+        .catch((reason) => {
+          if (!canceled) {
+            setError(String(reason));
+          }
+        });
+    }, 120);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [apps, query]);
 
   useLayoutEffect(() => {
     if (!tooltip || !tooltipRef.current) {
@@ -180,6 +201,12 @@ function LauncherWindow() {
     try {
       const scanned = await invoke<AppEntry[]>("scan_apps");
       setApps(scanned);
+      if (!query.trim()) {
+        setFilteredApps(scanned);
+      } else {
+        const result = await invoke<AppEntry[]>("search_apps", { query });
+        setFilteredApps(result);
+      }
       setError("");
     } catch (reason) {
       setError(String(reason));

@@ -1,3 +1,4 @@
+use ib_pinyin::{matcher::PinyinMatcher, pinyin::PinyinNotation};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -99,6 +100,8 @@ struct AppEntry {
     launches: u32,
     accent: String,
     initials: String,
+    #[serde(default)]
+    search_text: String,
     source: String,
 }
 
@@ -136,6 +139,11 @@ fn get_apps() -> Vec<AppEntry> {
 #[tauri::command]
 fn scan_apps(app: AppHandle) -> Result<Vec<AppEntry>, String> {
     scan_store_and_emit(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn search_apps(query: String) -> Vec<AppEntry> {
+    filter_apps(load_apps().unwrap_or_default(), &query)
 }
 
 #[tauri::command]
@@ -230,6 +238,24 @@ fn scan_store_and_emit(app: &AppHandle) -> io::Result<Vec<AppEntry>> {
     store_apps(&apps)?;
     let _ = app.emit("apps-updated", apps.clone());
     Ok(apps)
+}
+
+fn filter_apps(apps: Vec<AppEntry>, query: &str) -> Vec<AppEntry> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return apps;
+    }
+
+    let matcher = PinyinMatcher::builder(query.as_str())
+        .pinyin_notations(PinyinNotation::Ascii | PinyinNotation::AsciiFirstLetter)
+        .is_pattern_partial(true)
+        .build();
+
+    apps.into_iter()
+        .filter(|app| {
+            app.search_text.to_lowercase().contains(&query) || matcher.is_match(app.name.as_str())
+        })
+        .collect()
 }
 
 fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
@@ -392,9 +418,12 @@ fn build_app_entry(
     source: String,
 ) -> AppEntry {
     let id = stable_id(&source, &path, &launch_args);
+    let initials = initials(&name);
+    let search_text = search_text(&name, &path, &launch_args, &working_dir, &source, &initials);
     AppEntry {
         id: id.clone(),
-        initials: initials(&name),
+        initials,
+        search_text,
         accent: accent_color(&id),
         name,
         path,
@@ -429,17 +458,103 @@ fn parent_dir(path: &Path) -> String {
 }
 
 fn initials(name: &str) -> String {
-    let chars: String = name
-        .chars()
-        .filter(|ch| ch.is_alphanumeric())
-        .take(2)
-        .collect();
-
-    if chars.is_empty() {
-        String::from("APP")
-    } else {
-        chars.to_uppercase()
+    let english_words = split_english_words(name);
+    if english_words.len() >= 2 {
+        return english_words
+            .iter()
+            .take(4)
+            .filter_map(|word| word.chars().next())
+            .collect::<String>()
+            .to_uppercase();
     }
+
+    let chinese_initials = chinese_initials(name);
+    if !chinese_initials.is_empty() {
+        return chinese_initials.chars().take(5).collect::<String>();
+    }
+
+    if let Some(word) = english_words.first() {
+        return word.chars().take(3).collect::<String>().to_uppercase();
+    }
+
+    String::from("APP")
+}
+
+fn search_text(
+    name: &str,
+    path: &str,
+    launch_args: &str,
+    working_dir: &str,
+    source: &str,
+    initials: &str,
+) -> String {
+    let english_words = split_english_words(name);
+    let english_initials = english_words
+        .iter()
+        .filter_map(|word| word.chars().next())
+        .collect::<String>();
+    let mut tokens = vec![
+        name.to_string(),
+        path.to_string(),
+        launch_args.to_string(),
+        working_dir.to_string(),
+        source.to_string(),
+        initials.to_string(),
+        english_initials,
+        english_words.join(""),
+    ];
+    tokens.extend(english_words);
+
+    tokens
+        .into_iter()
+        .map(|token| token.trim().to_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn split_english_words(value: &str) -> Vec<String> {
+    let mut normalized = String::new();
+    let mut previous_was_lower_or_digit = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if previous_was_lower_or_digit && ch.is_ascii_uppercase() {
+                normalized.push(' ');
+            }
+            normalized.push(ch);
+            previous_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else {
+            normalized.push(' ');
+            previous_was_lower_or_digit = false;
+        }
+    }
+
+    normalized
+        .split_whitespace()
+        .map(|word| word.to_string())
+        .collect()
+}
+
+fn chinese_initials(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| is_cjk(*ch))
+        .filter_map(|ch| {
+            let text = ch.to_string();
+            ('A'..='Z').find(|letter| {
+                let pattern = letter.to_ascii_lowercase().to_string();
+                PinyinMatcher::builder(pattern.as_str())
+                    .pinyin_notations(PinyinNotation::AsciiFirstLetter)
+                    .build()
+                    .is_match(text.as_str())
+            })
+        })
+        .collect()
+}
+
+fn is_cjk(ch: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&ch)
 }
 
 fn accent_color(id: &str) -> String {
@@ -453,6 +568,48 @@ fn accent_color(id: &str) -> String {
         .fold(0usize, |acc, value| acc.wrapping_add(*value as usize))
         % palette.len();
     palette[index].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app(name: &str) -> AppEntry {
+        build_app_entry(
+            name.to_string(),
+            format!(r"C:\Apps\{name}\{name}.exe"),
+            String::new(),
+            format!(r"C:\Apps\{name}"),
+            format!(r"C:\Apps\{name}\{name}.lnk"),
+        )
+    }
+
+    fn matched_names(apps: Vec<AppEntry>, query: &str) -> Vec<String> {
+        filter_apps(apps, query)
+            .into_iter()
+            .map(|app| app.name)
+            .collect()
+    }
+
+    #[test]
+    fn search_matches_english_fragments_and_initials() {
+        let apps = vec![test_app("ActivityWatch"), test_app("Everything")];
+
+        assert_eq!(matched_names(apps.clone(), "act"), vec!["ActivityWatch"]);
+        assert_eq!(matched_names(apps.clone(), "wat"), vec!["ActivityWatch"]);
+        assert_eq!(matched_names(apps, "aw"), vec!["ActivityWatch"]);
+    }
+
+    #[test]
+    fn search_matches_chinese_pinyin_and_initials() {
+        let apps = vec![test_app("微信"), test_app("网易云音乐")];
+
+        assert_eq!(matched_names(apps.clone(), "wx"), vec!["微信"]);
+        assert_eq!(matched_names(apps.clone(), "wei"), vec!["微信"]);
+        assert_eq!(matched_names(apps.clone(), "xi"), vec!["微信"]);
+        assert_eq!(matched_names(apps.clone(), "wyyyy"), vec!["网易云音乐"]);
+        assert_eq!(matched_names(apps, "wang"), vec!["网易云音乐"]);
+    }
 }
 
 fn lightweight_mode_enabled() -> bool {
@@ -700,6 +857,7 @@ pub fn run() {
             dismiss_after_launch,
             get_apps,
             scan_apps,
+            search_apps,
             get_settings,
             save_settings,
             close_settings_window

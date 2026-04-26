@@ -84,6 +84,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
     "launches": 0,
     "accent": "#2563eb",
     "initials": "AP",
+    "searchText": "appname app ap c:\\path\\app.exe",
     "source": "C:\\Shortcut\\App.lnk"
   }
 ]
@@ -98,6 +99,8 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 托盘菜单 `退出` 才真正退出整个进程。
 - 托盘 `轻量模式` 只在当前进程内生效，不保存到 JSON。
 - 当前 `.lnk` 解析使用 PowerShell 调用 Windows WScript Shell COM，后续如果扫描性能不够，再替换为 Rust 侧直接 COM 调用。
+- `initials` 和 `searchText` 在 Rust 扫描阶段生成；`searchText` 只保存普通文本、路径、英文分词和英文首字母。
+- 中文拼音搜索由 Rust 后端 `search_apps` 命令使用 `ib-pinyin` 执行，前端不要重复计算拼音索引。
 - 当前主界面“添加”和设置里的“浏览”是保留入口，真实功能在后续阶段接入。
 - 用户要求调整功能、交互、产品规则时，同步更新文档中的最终版本描述。
 - 纯 bug 修复不用更新产品计划。
