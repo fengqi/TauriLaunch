@@ -1,6 +1,7 @@
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 type AppEntry = {
@@ -8,9 +9,11 @@ type AppEntry = {
   name: string;
   path: string;
   launchArgs: string;
+  workingDir: string;
   launches: number;
   accent: string;
   initials: string;
+  source: string;
 };
 
 type TooltipState = {
@@ -30,6 +33,7 @@ type AppSettings = {
   windowBottomOffset: number;
   startupLaunchMode: LaunchMode;
   manualLaunchMode: LaunchMode;
+  watchedDirectories: string[];
 };
 
 type SettingsTab = "directories" | "icons" | "interface" | "other" | "info";
@@ -39,376 +43,12 @@ const defaultSettings: AppSettings = {
   windowBottomOffset: 10,
   startupLaunchMode: "tray",
   manualLaunchMode: "window",
+  watchedDirectories: [
+    "C:\\Users\\fengqi\\Desktop\\App",
+    "C:\\Users\\fengqi\\Desktop\\Game",
+    "C:\\Users\\fengqi\\Desktop\\SingleExe",
+  ],
 };
-
-const sampleApps: AppEntry[] = [
-  {
-    id: "steam",
-    name: "Steam",
-    path: "C:\\Program Files\\Steam\\Steam.exe",
-    launchArgs: "",
-    launches: 35,
-    accent: "#245b9f",
-    initials: "St",
-  },
-  {
-    id: "wechat",
-    name: "微信",
-    path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
-    launchArgs: "",
-    launches: 18,
-    accent: "#28c76f",
-    initials: "微",
-  },
-  {
-    id: "notepad2",
-    name: "Notepad2",
-    path: "C:\\Tools\\Notepad2\\Notepad2.exe",
-    launchArgs: "",
-    launches: 9,
-    accent: "#8bb8c8",
-    initials: "N2",
-  },
-  {
-    id: "uu",
-    name: "UU加速器",
-    path: "C:\\Program Files\\Netease\\UU\\uu.exe",
-    launchArgs: "",
-    launches: 4,
-    accent: "#06a6d8",
-    initials: "UU",
-  },
-  {
-    id: "kook",
-    name: "KOOK",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
-    launchArgs: "",
-    launches: 12,
-    accent: "#64d923",
-    initials: "K",
-  },
-  {
-    id: "vscode",
-    name: "Visual Studio Code",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-    launchArgs: "--reuse-window",
-    launches: 41,
-    accent: "#2f80ed",
-    initials: "VS",
-  },
-  {
-    id: "everything",
-    name: "Everything",
-    path: "C:\\Program Files\\Everything\\Everything.exe",
-    launchArgs: "-startup",
-    launches: 28,
-    accent: "#ff8a00",
-    initials: "Ev",
-  },
-  {
-    id: "telegram",
-    name: "Telegram",
-    path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
-    launchArgs: "",
-    launches: 22,
-    accent: "#2aabee",
-    initials: "T",
-  },
-  {
-    id: "obs",
-    name: "Neat Download Manager",
-    path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
-    launchArgs: "",
-    launches: 7,
-    accent: "#303238",
-    initials: "OBS",
-  },
-  {
-    id: "potplayer",
-    name: "Driver Store Explorer",
-    path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
-    launchArgs: "",
-    launches: 16,
-    accent: "#ffd400",
-    initials: "P",
-  },
-  {
-    id: "steam",
-    name: "Kingdom Come - Deliverance II",
-    path: "C:\\Program Files\\Steam\\Steam.exe",
-    launchArgs: "",
-    launches: 35,
-    accent: "#245b9f",
-    initials: "St",
-  },
-  {
-    id: "wechat",
-    name: "微信",
-    path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
-    launchArgs: "",
-    launches: 18,
-    accent: "#28c76f",
-    initials: "微",
-  },
-  {
-    id: "notepad2",
-    name: "Notepad2",
-    path: "C:\\Tools\\Notepad2\\Notepad2.exe",
-    launchArgs: "",
-    launches: 9,
-    accent: "#8bb8c8",
-    initials: "N2",
-  },
-  {
-    id: "uu",
-    name: "UU加速器",
-    path: "C:\\Program Files\\Netease\\UU\\uu.exe",
-    launchArgs: "",
-    launches: 4,
-    accent: "#06a6d8",
-    initials: "UU",
-  },
-  {
-    id: "kook",
-    name: "KOOK",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
-    launchArgs: "",
-    launches: 12,
-    accent: "#64d923",
-    initials: "K",
-  },
-  {
-    id: "vscode",
-    name: "VS Code",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-    launchArgs: "--reuse-window",
-    launches: 41,
-    accent: "#2f80ed",
-    initials: "VS",
-  },
-  {
-    id: "everything",
-    name: "Everything",
-    path: "C:\\Program Files\\Everything\\Everything.exe",
-    launchArgs: "-startup",
-    launches: 28,
-    accent: "#ff8a00",
-    initials: "Ev",
-  },
-  {
-    id: "telegram",
-    name: "Telegram",
-    path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
-    launchArgs: "",
-    launches: 22,
-    accent: "#2aabee",
-    initials: "T",
-  },
-  {
-    id: "obs",
-    name: "OBS Studio",
-    path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
-    launchArgs: "",
-    launches: 7,
-    accent: "#303238",
-    initials: "OBS",
-  },
-  {
-    id: "potplayer",
-    name: "PotPlayer",
-    path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
-    launchArgs: "",
-    launches: 16,
-    accent: "#ffd400",
-    initials: "P",
-  },
-  {
-    id: "steam",
-    name: "Steam",
-    path: "C:\\Program Files\\Steam\\Steam.exe",
-    launchArgs: "",
-    launches: 35,
-    accent: "#245b9f",
-    initials: "St",
-  },
-  {
-    id: "wechat",
-    name: "微信",
-    path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
-    launchArgs: "",
-    launches: 18,
-    accent: "#28c76f",
-    initials: "微",
-  },
-  {
-    id: "notepad2",
-    name: "Notepad2",
-    path: "C:\\Tools\\Notepad2\\Notepad2.exe",
-    launchArgs: "",
-    launches: 9,
-    accent: "#8bb8c8",
-    initials: "N2",
-  },
-  {
-    id: "uu",
-    name: "UU加速器",
-    path: "C:\\Program Files\\Netease\\UU\\uu.exe",
-    launchArgs: "",
-    launches: 4,
-    accent: "#06a6d8",
-    initials: "UU",
-  },
-  {
-    id: "kook",
-    name: "KOOK",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
-    launchArgs: "",
-    launches: 12,
-    accent: "#64d923",
-    initials: "K",
-  },
-  {
-    id: "vscode",
-    name: "VS Code",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-    launchArgs: "--reuse-window",
-    launches: 41,
-    accent: "#2f80ed",
-    initials: "VS",
-  },
-  {
-    id: "everything",
-    name: "Everything",
-    path: "C:\\Program Files\\Everything\\Everything.exe",
-    launchArgs: "-startup",
-    launches: 28,
-    accent: "#ff8a00",
-    initials: "Ev",
-  },
-  {
-    id: "telegram",
-    name: "Telegram",
-    path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
-    launchArgs: "",
-    launches: 22,
-    accent: "#2aabee",
-    initials: "T",
-  },
-  {
-    id: "obs",
-    name: "OBS Studio",
-    path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
-    launchArgs: "",
-    launches: 7,
-    accent: "#303238",
-    initials: "OBS",
-  },
-  {
-    id: "potplayer",
-    name: "PotPlayer",
-    path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
-    launchArgs: "",
-    launches: 16,
-    accent: "#ffd400",
-    initials: "P",
-  },
-  {
-    id: "steam",
-    name: "Steam",
-    path: "C:\\Program Files\\Steam\\Steam.exe",
-    launchArgs: "",
-    launches: 35,
-    accent: "#245b9f",
-    initials: "St",
-  },
-  {
-    id: "wechat",
-    name: "微信",
-    path: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
-    launchArgs: "",
-    launches: 18,
-    accent: "#28c76f",
-    initials: "微",
-  },
-  {
-    id: "notepad2",
-    name: "Notepad2",
-    path: "C:\\Tools\\Notepad2\\Notepad2.exe",
-    launchArgs: "",
-    launches: 9,
-    accent: "#8bb8c8",
-    initials: "N2",
-  },
-  {
-    id: "uu",
-    name: "UU加速器",
-    path: "C:\\Program Files\\Netease\\UU\\uu.exe",
-    launchArgs: "",
-    launches: 4,
-    accent: "#06a6d8",
-    initials: "UU",
-  },
-  {
-    id: "kook",
-    name: "KOOK",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\KOOK\\KOOK.exe",
-    launchArgs: "",
-    launches: 12,
-    accent: "#64d923",
-    initials: "K",
-  },
-  {
-    id: "vscode",
-    name: "VS Code",
-    path: "C:\\Users\\fengqi\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-    launchArgs: "--reuse-window",
-    launches: 41,
-    accent: "#2f80ed",
-    initials: "VS",
-  },
-  {
-    id: "everything",
-    name: "Everything",
-    path: "C:\\Program Files\\Everything\\Everything.exe",
-    launchArgs: "-startup",
-    launches: 28,
-    accent: "#ff8a00",
-    initials: "Ev",
-  },
-  {
-    id: "telegram",
-    name: "Telegram",
-    path: "C:\\Users\\fengqi\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
-    launchArgs: "",
-    launches: 22,
-    accent: "#2aabee",
-    initials: "T",
-  },
-  {
-    id: "obs",
-    name: "OBS Studio",
-    path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
-    launchArgs: "",
-    launches: 7,
-    accent: "#303238",
-    initials: "OBS",
-  },
-  {
-    id: "potplayer",
-    name: "PotPlayer",
-    path: "C:\\Program Files\\DAUM\\PotPlayer\\PotPlayerMini64.exe",
-    launchArgs: "",
-    launches: 16,
-    accent: "#ffd400",
-    initials: "P",
-  },
-];
-
-const directories = [
-  "C:\\Users\\fengqi\\Desktop\\App",
-  "C:\\Users\\fengqi\\Desktop\\Game",
-  "C:\\Users\\fengqi\\Desktop\\SingleExe",
-];
 
 const settingsTabs: { id: SettingsTab; label: string }[] = [
   { id: "directories", label: "目录监听" },
@@ -434,6 +74,9 @@ function App() {
 
 function LauncherWindow() {
   const [query, setQuery] = useState("");
+  const [apps, setApps] = useState<AppEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({
     left: 0,
@@ -442,18 +85,52 @@ function LauncherWindow() {
   });
   const tooltipRef = useRef<HTMLDivElement>(null);
 
-  const apps = useMemo(() => {
+  const filteredApps = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) {
-      return sampleApps;
+      return apps;
     }
 
-    return sampleApps.filter(
+    return apps.filter(
       (app) =>
         app.name.toLowerCase().includes(keyword) ||
-        app.path.toLowerCase().includes(keyword),
+        app.path.toLowerCase().includes(keyword) ||
+        app.launchArgs.toLowerCase().includes(keyword),
     );
-  }, [query]);
+  }, [apps, query]);
+
+  useEffect(() => {
+    let canceled = false;
+
+    invoke<AppEntry[]>("get_apps")
+      .then((loadedApps) => {
+        if (!canceled) {
+          setApps(loadedApps);
+          setError("");
+        }
+      })
+      .catch((reason) => {
+        if (!canceled) {
+          setError(String(reason));
+        }
+      })
+      .finally(() => {
+        if (!canceled) {
+          setLoading(false);
+        }
+      });
+
+    const unlisten = listen<AppEntry[]>("apps-updated", (event) => {
+      setApps(event.payload);
+      setError("");
+      setLoading(false);
+    });
+
+    return () => {
+      canceled = true;
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!tooltip || !tooltipRef.current) {
@@ -498,10 +175,23 @@ function LauncherWindow() {
     await invoke("dismiss_after_launch", { appName: app.name });
   }
 
+  async function scanApps() {
+    setLoading(true);
+    try {
+      const scanned = await invoke<AppEntry[]>("scan_apps");
+      setApps(scanned);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter" && apps.length > 0) {
+    if (event.key === "Enter" && filteredApps.length > 0) {
       event.preventDefault();
-      void launchApp(apps[0]);
+      void launchApp(filteredApps[0]);
     }
   }
 
@@ -549,7 +239,7 @@ function LauncherWindow() {
         </div>
         <div className="toolbar">
           <label className="search-box">
-            <span aria-hidden="true">🔍</span>
+            <span aria-hidden="true">⌕</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
@@ -557,6 +247,10 @@ function LauncherWindow() {
               placeholder="搜索应用"
             />
           </label>
+          <button type="button" className="toolbar-button" onClick={scanApps}>
+            <span aria-hidden="true">↻</span>
+            扫描
+          </button>
           <button type="button" className="toolbar-button">
             <span aria-hidden="true">＋</span>
             添加
@@ -572,25 +266,35 @@ function LauncherWindow() {
         </div>
       </header>
 
-      <section className="app-grid" aria-label="应用列表">
-        {apps.map((app, index) => (
-          <button
-            key={`${app.id}-${index}`}
-            type="button"
-            className="app-tile"
-            onDoubleClick={() => void launchApp(app)}
-            onMouseEnter={(event) => showAppTooltip(app, event)}
-            onMouseLeave={hideAppTooltip}
-            onFocus={(event) => showAppTooltip(app, event)}
-            onBlur={hideAppTooltip}
-          >
-            <span className="app-icon" style={{ background: app.accent }}>
-              {app.initials}
-            </span>
-            <span className="app-name">{app.name}</span>
-          </button>
-        ))}
-      </section>
+      {loading ? (
+        <section className="app-state">正在扫描应用...</section>
+      ) : error ? (
+        <section className="app-state error-state">{error}</section>
+      ) : filteredApps.length === 0 ? (
+        <section className="app-state">
+          未找到应用，可在设置里添加监听目录后点击扫描。
+        </section>
+      ) : (
+        <section className="app-grid" aria-label="应用列表">
+          {filteredApps.map((app) => (
+            <button
+              key={app.id}
+              type="button"
+              className="app-tile"
+              onDoubleClick={() => void launchApp(app)}
+              onMouseEnter={(event) => showAppTooltip(app, event)}
+              onMouseLeave={hideAppTooltip}
+              onFocus={(event) => showAppTooltip(app, event)}
+              onBlur={hideAppTooltip}
+            >
+              <span className="app-icon" style={{ background: app.accent }}>
+                {app.initials}
+              </span>
+              <span className="app-name">{app.name}</span>
+            </button>
+          ))}
+        </section>
+      )}
 
       {tooltip ? (
         <div
@@ -612,6 +316,8 @@ function LauncherWindow() {
 function SettingsWindow() {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [activeTab, setActiveTab] = useState<SettingsTab>("directories");
+  const [directoryInput, setDirectoryInput] = useState("");
+  const [selectedDirectory, setSelectedDirectory] = useState("");
   const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
@@ -620,7 +326,12 @@ function SettingsWindow() {
     invoke<AppSettings>("get_settings")
       .then((loaded) => {
         if (!canceled) {
-          setSettings(loaded);
+          setSettings({
+            ...defaultSettings,
+            ...loaded,
+            watchedDirectories:
+              loaded.watchedDirectories ?? defaultSettings.watchedDirectories,
+          });
         }
       })
       .catch(() => {
@@ -672,21 +383,84 @@ function SettingsWindow() {
     }));
   }
 
+  function addDirectory() {
+    const nextDirectory = directoryInput.trim();
+    if (!nextDirectory) {
+      return;
+    }
+
+    setSettings((current) => {
+      if (
+        current.watchedDirectories.some(
+          (directory) =>
+            directory.toLowerCase() === nextDirectory.toLowerCase(),
+        )
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        watchedDirectories: [...current.watchedDirectories, nextDirectory],
+      };
+    });
+    setDirectoryInput("");
+    setSelectedDirectory(nextDirectory);
+  }
+
+  function removeDirectory() {
+    if (!selectedDirectory) {
+      return;
+    }
+
+    setSettings((current) => ({
+      ...current,
+      watchedDirectories: current.watchedDirectories.filter(
+        (directory) => directory !== selectedDirectory,
+      ),
+    }));
+    setSelectedDirectory("");
+  }
+
   function renderSettingsPanel() {
     if (activeTab === "directories") {
       return (
         <div className="settings-section directory-section">
           <h2>目录监听</h2>
-          <div className="directory-list">
-            {directories.map((directory) => (
-              <div key={directory}>{directory}</div>
+          <div className="directory-list" role="listbox" aria-label="监听目录">
+            {settings.watchedDirectories.map((directory) => (
+              <button
+                key={directory}
+                type="button"
+                className={directory === selectedDirectory ? "selected" : ""}
+                onClick={() => {
+                  setSelectedDirectory(directory);
+                  setDirectoryInput(directory);
+                }}
+              >
+                {directory}
+              </button>
             ))}
           </div>
           <div className="directory-actions">
-            <input aria-label="目录路径" />
+            <input
+              aria-label="目录路径"
+              value={directoryInput}
+              onChange={(event) => setDirectoryInput(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addDirectory();
+                }
+              }}
+            />
             <button type="button">浏览</button>
-            <button type="button">添加</button>
-            <button type="button">删除</button>
+            <button type="button" onClick={addDirectory}>
+              添加
+            </button>
+            <button type="button" onClick={removeDirectory}>
+              删除
+            </button>
           </div>
         </div>
       );

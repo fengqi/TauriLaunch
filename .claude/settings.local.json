@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(cargo build *)",
+      "Bash(taskkill /f /im taurilaunch.exe)",
+      "Bash(powershell *)",
+      "Bash(start *)"
+    ]
+  }
+}

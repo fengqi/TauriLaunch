@@ -28,7 +28,7 @@ npm run tauri build
 $env:Path="$env:USERPROFILE\.cargo\bin;$env:Path"
 ```
 
-如果当前 PowerShell 找不到 MSVC 工具，可用 Developer Command Prompt，或先加载：
+如果当前 PowerShell 找不到 MSVC 工具，可使用 Developer Command Prompt，或先加载：
 
 ```powershell
 $vsdev = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'
@@ -41,37 +41,64 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 设置窗口：`docs/design/settings-dialog.png`
 - 托盘菜单：`docs/design/tray-context-menu.png`
 
-## 注意事项
+## 本地数据
 
-- 主窗口关闭不是普通隐藏，而是销毁 WebView 窗口。
-- 失焦销毁只针对主启动器窗口，不用于设置窗口和关于窗口。
-- 主窗口每次创建/显示时都会按设置中的右边距、下边距定位到屏幕右下角。
-- 设置窗口和关于窗口创建后居中显示。
-- 开机启动通过 `--startup` 或 `--autostart` 参数识别，默认只启动到托盘。
-- 普通双击启动默认显示主窗口，可在设置中改为启动到托盘。
-- 托盘菜单 `退出` 才真正退出整个进程。
-- M1 中扫描和启动是真功能的占位入口，后续在 M2/M3 补齐。
-- 用户要求调整功能、交互、产品规则时，同步更新文档中的最终版本描述。
-- 纯 bug 修复不用更新产品计划。
-- 文档不要用临时补充段落堆叠历史，只保留当前有效规则。
-
-## 窗口位置配置
-
-主窗口位置配置保存在：
+配置文件：
 
 ```text
 %LOCALAPPDATA%\com.fengqi.taurilaunch\settings.json
 ```
 
-字段：
+当前字段：
 
 ```json
 {
   "windowRightOffset": 10,
   "windowBottomOffset": 10,
   "startupLaunchMode": "tray",
-  "manualLaunchMode": "window"
+  "manualLaunchMode": "window",
+  "watchedDirectories": [
+    "C:\\Users\\fengqi\\Desktop\\App",
+    "C:\\Users\\fengqi\\Desktop\\Game",
+    "C:\\Users\\fengqi\\Desktop\\SingleExe"
+  ]
 }
 ```
 
-主窗口创建或重新显示时会读取该文件，并按当前显示器可用区域计算右下角位置。
+应用列表：
+
+```text
+%LOCALAPPDATA%\com.fengqi.taurilaunch\apps.json
+```
+
+当前字段：
+
+```json
+[
+  {
+    "id": "stable-id",
+    "name": "AppName",
+    "path": "C:\\Path\\App.exe",
+    "launchArgs": "",
+    "workingDir": "C:\\Path",
+    "launches": 0,
+    "accent": "#2563eb",
+    "initials": "AP",
+    "source": "C:\\Shortcut\\App.lnk"
+  }
+]
+```
+
+## 注意事项
+
+- 主窗口每次创建或重新显示时都会按设置中的右边距、下边距定位到屏幕右下角。
+- 设置窗口和关于窗口创建时直接居中显示。
+- 开机启动通过 `--startup` 或 `--autostart` 参数识别，默认只启动到托盘。
+- 普通双击启动默认显示主窗口，可在设置中改为启动到托盘。
+- 托盘菜单 `退出` 才真正退出整个进程。
+- 托盘 `轻量模式` 只在当前进程内生效，不保存到 JSON。
+- 当前 `.lnk` 解析使用 PowerShell 调用 Windows WScript Shell COM，后续如果扫描性能不够，再替换为 Rust 侧直接 COM 调用。
+- 当前主界面“添加”和设置里的“浏览”是保留入口，真实功能在后续阶段接入。
+- 用户要求调整功能、交互、产品规则时，同步更新文档中的最终版本描述。
+- 纯 bug 修复不用更新产品计划。
+- 文档不要使用临时补充段落堆叠历史，只保留当前有效规则。

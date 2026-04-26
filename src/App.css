@@ -145,6 +145,22 @@ button {
   -ms-overflow-style: none;
 }
 
+.app-state {
+  flex: 1;
+  min-height: 0;
+  padding: 28px 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  color: #667085;
+  font-size: 13px;
+  text-align: center;
+}
+
+.error-state {
+  color: #b42318;
+}
+
 .app-grid::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -288,8 +304,38 @@ button {
   padding: 5px 7px;
   border: 1px solid #cfd6df;
   border-radius: 6px;
-  line-height: 20px;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.directory-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.directory-list button {
+  min-height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #1f2328;
+  line-height: 20px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.directory-list button:hover,
+.directory-list button.selected {
+  background: #eaf3ff;
 }
 
 .directory-actions {
