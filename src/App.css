@@ -119,7 +119,8 @@ button {
 }
 
 .toolbar-button:hover,
-.app-tile:hover {
+.app-tile:hover,
+.app-tile:focus-visible {
   border-color: #3b82f6;
   background: #f0f7ff;
 }
@@ -170,51 +171,31 @@ button {
 .app-tile {
   position: relative;
   min-width: 0;
-  min-height: 92px;
-  padding: 10px 8px 8px;
+  min-height: max(104px, calc(var(--app-icon-size, 38px) + 66px));
+  padding: 10px 8px 12px;
   border: 1px solid #e1e6ec;
   border-radius: 8px;
   background: #fff;
   color: #1f2328;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: var(--app-icon-size, 38px) 44px;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  justify-items: center;
+  gap: 6px;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-}
-
-.app-hide {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 18px;
-  height: 18px;
-  border: 1px solid #d6dce4;
-  border-radius: 999px;
-  background: #fff;
-  color: #667085;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  line-height: 16px;
-}
-
-.app-tile:hover .app-hide,
-.app-tile:focus-visible .app-hide {
-  display: flex;
-}
-
-.app-hide:hover {
-  border-color: #b42318;
-  color: #b42318;
-  background: #fff5f5;
+  cursor: pointer;
+  user-select: none;
 }
 
 .app-icon {
   width: var(--app-icon-size, 38px);
   height: var(--app-icon-size, 38px);
+  min-width: var(--app-icon-size, 38px);
+  min-height: var(--app-icon-size, 38px);
+  max-width: var(--app-icon-size, 38px);
+  max-height: var(--app-icon-size, 38px);
+  flex: 0 0 var(--app-icon-size, 38px);
   border-radius: 9px;
   color: #fff;
   display: inline-flex;
@@ -240,14 +221,65 @@ button {
 
 .app-name {
   width: 100%;
-  min-height: 32px;
-  line-height: 16px;
+  height: 44px;
+  line-height: 14px;
   font-size: 13px;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
   overflow-wrap: anywhere;
+  overflow: hidden;
+}
+
+.app-name-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  background: #fff;
+  color: #1f2328;
+  font-size: 13px;
+  text-align: center;
+  outline: 0;
+}
+
+.app-context-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 150px;
+  padding: 5px;
+  border: 1px solid #cfd6df;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-context-menu button {
+  width: 100%;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #1f2328;
+  text-align: left;
+}
+
+.app-context-menu button:hover {
+  background: #eef6ff;
+}
+
+.app-context-menu button.danger {
+  color: #b42318;
+}
+
+.app-context-menu button.danger:hover {
+  background: #fff5f5;
 }
 
 .app-tooltip-floating {

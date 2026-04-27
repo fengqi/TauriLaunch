@@ -106,6 +106,8 @@ impl Default for AppSettings {
 struct AppEntry {
     id: String,
     name: String,
+    #[serde(default)]
+    custom_name: String,
     path: String,
     launch_args: String,
     working_dir: String,
@@ -134,6 +136,7 @@ struct ShortcutInfo {
 #[derive(Debug, Clone, Default)]
 struct AppMetadata {
     launches: u32,
+    custom_name: String,
     hidden: bool,
     last_error: String,
 }
@@ -189,6 +192,32 @@ fn hide_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
     let apps = hide_stored_app(&app_id).map_err(|error| error.to_string())?;
     let _ = app.emit("apps-updated", apps.clone());
     Ok(apps)
+}
+
+#[tauri::command]
+fn pin_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
+    let apps = pin_stored_app(&app_id).map_err(|error| error.to_string())?;
+    let _ = app.emit("apps-updated", apps.clone());
+    Ok(apps)
+}
+
+#[tauri::command]
+fn reset_app_position(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
+    let apps = reset_stored_app_position(&app_id).map_err(|error| error.to_string())?;
+    let _ = app.emit("apps-updated", apps.clone());
+    Ok(apps)
+}
+
+#[tauri::command]
+fn rename_app(app: AppHandle, app_id: String, name: String) -> Result<Vec<AppEntry>, String> {
+    let apps = rename_stored_app(&app_id, &name).map_err(|error| error.to_string())?;
+    let _ = app.emit("apps-updated", apps.clone());
+    Ok(apps)
+}
+
+#[tauri::command]
+fn open_app_directory(app_id: String) -> Result<(), String> {
+    open_stored_app_directory(&app_id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -355,6 +384,82 @@ fn hide_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
     Ok(visible_apps(apps))
 }
 
+fn pin_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let max_launches = apps
+        .iter()
+        .filter(|app| !app.hidden)
+        .map(|app| app.launches)
+        .max()
+        .unwrap_or_default();
+    let Some(app) = apps.iter_mut().find(|app| app.id == app_id && !app.hidden) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "应用不存在或已隐藏",
+        ));
+    };
+
+    app.launches = max_launches.saturating_add(2);
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    Ok(visible_apps(apps))
+}
+
+fn reset_stored_app_position(app_id: &str) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let Some(app) = apps.iter_mut().find(|app| app.id == app_id && !app.hidden) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "应用不存在或已隐藏",
+        ));
+    };
+
+    app.launches = 0;
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    Ok(visible_apps(apps))
+}
+
+fn rename_stored_app(app_id: &str, name: &str) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "名称不能为空"));
+    }
+
+    let Some(app) = apps.iter_mut().find(|app| app.id == app_id && !app.hidden) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "应用不存在或已隐藏",
+        ));
+    };
+
+    app.custom_name = name.to_string();
+    apply_display_name(app, name.to_string());
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    Ok(visible_apps(apps))
+}
+
+fn open_stored_app_directory(app_id: &str) -> io::Result<()> {
+    let apps = load_apps()?;
+    let Some(app) = apps.iter().find(|app| app.id == app_id && !app.hidden) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "应用不存在或已隐藏",
+        ));
+    };
+    let Some(directory) = Path::new(&app.path).parent() else {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "所在目录不存在"));
+    };
+
+    let mut command = Command::new("explorer.exe");
+    command.arg(directory);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command.spawn().map(|_| ())
+}
+
 fn start_process(app: &AppEntry) -> io::Result<()> {
     let path = PathBuf::from(&app.path);
     let args = split_launch_args(&app.launch_args)?;
@@ -432,6 +537,7 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
                 app.id,
                 AppMetadata {
                     launches: app.launches,
+                    custom_name: app.custom_name,
                     hidden: app.hidden,
                     last_error: app.last_error,
                 },
@@ -508,6 +614,10 @@ fn scan_directory(
                     app_entry.launches = metadata.launches;
                     app_entry.hidden = metadata.hidden;
                     app_entry.last_error = metadata.last_error.clone();
+                    app_entry.custom_name = metadata.custom_name.clone();
+                    if !metadata.custom_name.trim().is_empty() {
+                        apply_display_name(&mut app_entry, metadata.custom_name.clone());
+                    }
                 }
                 apps.push(app_entry);
             }
@@ -596,6 +706,7 @@ fn build_app_entry(
     let search_text = search_text(&name, &path, &launch_args, &working_dir, &source, &initials);
     AppEntry {
         id: id.clone(),
+        custom_name: String::new(),
         initials,
         search_text,
         icon_path: ensure_icon_cache(&id, &source, &path).unwrap_or_default(),
@@ -611,10 +722,23 @@ fn build_app_entry(
     }
 }
 
+fn apply_display_name(app: &mut AppEntry, name: String) {
+    app.name = name;
+    app.initials = initials(&app.name);
+    app.search_text = search_text(
+        &app.name,
+        &app.path,
+        &app.launch_args,
+        &app.working_dir,
+        &app.source,
+        &app.initials,
+    );
+}
+
 fn ensure_icon_cache(id: &str, source: &str, path: &str) -> io::Result<String> {
     let directory = icons_dir()?;
     fs::create_dir_all(&directory)?;
-    let icon_path = directory.join(format!("{id}.png"));
+    let icon_path = directory.join(format!("{id}-256.png"));
 
     if icon_path.exists() {
         return Ok(icon_path.to_string_lossy().into_owned());
@@ -632,9 +756,45 @@ fn extract_icon_to_png(source: &str, path: &str, output: &Path) -> io::Result<()
         r#"
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class IconNative {{
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  public static extern uint PrivateExtractIcons(string lpszFile, int nIconIndex, int cxIcon, int cyIcon, IntPtr[] phicon, uint[] piconid, uint nIcons, uint flags);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool DestroyIcon(IntPtr hIcon);
+}}
+"@
 $outputPath = {output}
 $candidates = @({source}, {path})
-$icon = $null
+$sizes = @(256, 128, 64, 48, 32)
+foreach ($candidate in $candidates) {{
+  if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {{
+    continue
+  }}
+  foreach ($size in $sizes) {{
+    $handles = New-Object IntPtr[] 1
+    $ids = New-Object UInt32[] 1
+    $count = [IconNative]::PrivateExtractIcons($candidate, 0, $size, $size, $handles, $ids, 1, 0)
+    if ($count -gt 0 -and $handles[0] -ne [IntPtr]::Zero) {{
+      try {{
+        $sourceIcon = [System.Drawing.Icon]::FromHandle($handles[0])
+        $icon = [System.Drawing.Icon]$sourceIcon.Clone()
+        $bitmap = $icon.ToBitmap()
+        $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bitmap.Dispose()
+        $icon.Dispose()
+        exit 0
+      }} finally {{
+        [IconNative]::DestroyIcon($handles[0]) | Out-Null
+      }}
+    }}
+  }}
+}}
+
 foreach ($candidate in $candidates) {{
   if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {{
     continue
@@ -642,17 +802,15 @@ foreach ($candidate in $candidates) {{
   try {{
     $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($candidate)
     if ($null -ne $icon) {{
-      break
+      $bitmap = $icon.ToBitmap()
+      $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+      $bitmap.Dispose()
+      $icon.Dispose()
+      exit 0
     }}
   }} catch {{}}
 }}
-if ($null -eq $icon) {{
-  exit 1
-}}
-$bitmap = $icon.ToBitmap()
-$bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
-$bitmap.Dispose()
-$icon.Dispose()
+exit 1
 "#
     );
 
@@ -1218,6 +1376,10 @@ pub fn run() {
             dismiss_main_window,
             launch_app,
             hide_app,
+            pin_app,
+            reset_app_position,
+            rename_app,
+            open_app_directory,
             get_apps,
             scan_apps,
             search_apps,

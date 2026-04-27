@@ -8,6 +8,7 @@ import "./App.css";
 type AppEntry = {
   id: string;
   name: string;
+  customName: string;
   path: string;
   launchArgs: string;
   workingDir: string;
@@ -29,6 +30,12 @@ type TooltipState = {
     top: number;
     bottom: number;
   };
+};
+
+type AppContextMenuState = {
+  app: AppEntry;
+  left: number;
+  top: number;
 };
 
 type LaunchMode = "tray" | "window";
@@ -89,12 +96,18 @@ function LauncherWindow() {
   const [error, setError] = useState("");
   const [iconSize, setIconSize] = useState(defaultSettings.iconSize);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [contextMenu, setContextMenu] = useState<AppContextMenuState | null>(
+    null,
+  );
+  const [editingAppId, setEditingAppId] = useState("");
+  const [editingName, setEditingName] = useState("");
   const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({
     left: 0,
     top: 0,
     visibility: "hidden",
   });
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let canceled = false;
@@ -217,11 +230,22 @@ function LauncherWindow() {
     });
   }, [tooltip]);
 
+  useEffect(() => {
+    if (editingAppId) {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }
+  }, [editingAppId]);
+
   async function closeMainWindow() {
     await invoke("dismiss_main_window");
   }
 
   async function launchApp(app: AppEntry) {
+    if (editingAppId) {
+      return;
+    }
+
     try {
       const updatedApps = await invoke<AppEntry[]>("launch_app", {
         appId: app.id,
@@ -241,15 +265,90 @@ function LauncherWindow() {
     }
   }
 
+  async function applyUpdatedApps(updatedApps: AppEntry[]) {
+    setApps(updatedApps);
+    if (!query.trim()) {
+      setFilteredApps(updatedApps);
+      return;
+    }
+
+    const result = await invoke<AppEntry[]>("search_apps", { query });
+    setFilteredApps(result);
+  }
+
   async function hideApp(app: AppEntry) {
     try {
       const updatedApps = await invoke<AppEntry[]>("hide_app", {
         appId: app.id,
       });
-      setApps(updatedApps);
-      setFilteredApps((current) =>
-        current.filter((entry) => entry.id !== app.id),
-      );
+      await applyUpdatedApps(updatedApps);
+      setTooltip(null);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function pinApp(app: AppEntry) {
+    try {
+      const updatedApps = await invoke<AppEntry[]>("pin_app", {
+        appId: app.id,
+      });
+      await applyUpdatedApps(updatedApps);
+      setTooltip(null);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function resetAppPosition(app: AppEntry) {
+    try {
+      const updatedApps = await invoke<AppEntry[]>("reset_app_position", {
+        appId: app.id,
+      });
+      await applyUpdatedApps(updatedApps);
+      setTooltip(null);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function openAppDirectory(app: AppEntry) {
+    try {
+      await invoke("open_app_directory", { appId: app.id });
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  function startRename(app: AppEntry) {
+    setTooltip(null);
+    setEditingAppId(app.id);
+    setEditingName(app.name);
+  }
+
+  function cancelRename() {
+    setEditingAppId("");
+    setEditingName("");
+  }
+
+  async function saveRename(app: AppEntry) {
+    const name = editingName.trim();
+    if (!name || name === app.name) {
+      cancelRename();
+      return;
+    }
+
+    try {
+      const updatedApps = await invoke<AppEntry[]>("rename_app", {
+        appId: app.id,
+        name,
+      });
+      await applyUpdatedApps(updatedApps);
+      cancelRename();
       setTooltip(null);
       setError("");
     } catch (reason) {
@@ -285,7 +384,7 @@ function LauncherWindow() {
 
   function showAppTooltip(
     app: AppEntry,
-    event: MouseEvent<HTMLButtonElement> | FocusEvent<HTMLButtonElement>,
+    event: MouseEvent<HTMLDivElement> | FocusEvent<HTMLDivElement>,
   ) {
     const rect = event.currentTarget.getBoundingClientRect();
     setTooltipStyle({
@@ -308,8 +407,33 @@ function LauncherWindow() {
     setTooltip(null);
   }
 
+  function showAppContextMenu(
+    app: AppEntry,
+    event: MouseEvent<HTMLDivElement>,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    setTooltip(null);
+    setContextMenu({
+      app,
+      left: Math.min(event.clientX, window.innerWidth - 160),
+      top: Math.min(event.clientY, window.innerHeight - 170),
+    });
+  }
+
+  function closeContextMenu() {
+    setContextMenu(null);
+  }
+
   return (
-    <main className="launcher-shell">
+    <main
+      className="launcher-shell"
+      onClick={closeContextMenu}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        closeContextMenu();
+      }}
+    >
       <header className="launcher-header">
         <div className="title-block">
           <div className="app-mark" aria-hidden="true">
@@ -371,29 +495,27 @@ function LauncherWindow() {
           style={{ "--app-icon-size": `${iconSize}px` } as CSSProperties}
         >
           {filteredApps.map((app) => (
-            <button
+            <div
               key={app.id}
-              type="button"
               className="app-tile"
+              role="button"
+              tabIndex={0}
               onClick={() => void launchApp(app)}
+              onKeyDown={(event) => {
+                if (
+                  !editingAppId &&
+                  (event.key === "Enter" || event.key === " ")
+                ) {
+                  event.preventDefault();
+                  void launchApp(app);
+                }
+              }}
+              onContextMenu={(event) => showAppContextMenu(app, event)}
               onMouseEnter={(event) => showAppTooltip(app, event)}
               onMouseLeave={hideAppTooltip}
               onFocus={(event) => showAppTooltip(app, event)}
               onBlur={hideAppTooltip}
             >
-              <span
-                role="button"
-                tabIndex={-1}
-                className="app-hide"
-                title="隐藏"
-                aria-label={`隐藏 ${app.name}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void hideApp(app);
-                }}
-              >
-                ×
-              </span>
               {app.iconPath ? (
                 <span className="app-icon image-icon">
                   <img src={convertFileSrc(app.iconPath)} alt="" />
@@ -403,11 +525,92 @@ function LauncherWindow() {
                   {app.initials}
                 </span>
               )}
-              <span className="app-name">{app.name}</span>
-            </button>
+              {editingAppId === app.id ? (
+                <input
+                  ref={nameInputRef}
+                  className="app-name-input"
+                  value={editingName}
+                  onClick={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onChange={(event) => setEditingName(event.currentTarget.value)}
+                  onBlur={cancelRename}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void saveRename(app);
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      cancelRename();
+                    }
+                  }}
+                />
+              ) : (
+                <span className="app-name">{app.name}</span>
+              )}
+            </div>
           ))}
         </section>
       )}
+
+      {contextMenu ? (
+        <div
+          className="app-context-menu"
+          style={{ left: contextMenu.left, top: contextMenu.top }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              closeContextMenu();
+              void pinApp(contextMenu.app);
+            }}
+          >
+            置顶
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              closeContextMenu();
+              void resetAppPosition(contextMenu.app);
+            }}
+          >
+            重置位置
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const app = contextMenu.app;
+              closeContextMenu();
+              startRename(app);
+            }}
+          >
+            修改名称
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              closeContextMenu();
+              void openAppDirectory(contextMenu.app);
+            }}
+          >
+            打开所在目录
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              closeContextMenu();
+              void hideApp(contextMenu.app);
+            }}
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
 
       {tooltip ? (
         <div
@@ -506,7 +709,7 @@ function SettingsWindow() {
 
   function updateIconSize(value: string) {
     const iconSize = Number.parseInt(value, 10);
-    if (![32, 38, 48, 64].includes(iconSize)) {
+    if (![32, 38, 48].includes(iconSize)) {
       return;
     }
 
@@ -628,7 +831,6 @@ function SettingsWindow() {
               <option value="32">32x32</option>
               <option value="38">38x38</option>
               <option value="48">48x48</option>
-              <option value="64">64x64</option>
             </select>
           </label>
         </div>
