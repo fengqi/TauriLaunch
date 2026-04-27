@@ -103,6 +103,10 @@ struct AppEntry {
     #[serde(default)]
     search_text: String,
     source: String,
+    #[serde(default)]
+    hidden: bool,
+    #[serde(default)]
+    last_error: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +115,13 @@ struct ShortcutInfo {
     target_path: String,
     arguments: String,
     working_directory: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AppMetadata {
+    launches: u32,
+    hidden: bool,
+    last_error: String,
 }
 
 fn default_right_offset() -> i32 {
@@ -133,7 +144,7 @@ fn save_settings(settings: AppSettings) -> Result<(), String> {
 
 #[tauri::command]
 fn get_apps() -> Vec<AppEntry> {
-    load_apps().unwrap_or_default()
+    visible_apps(load_apps().unwrap_or_default())
 }
 
 #[tauri::command]
@@ -143,17 +154,26 @@ fn scan_apps(app: AppHandle) -> Result<Vec<AppEntry>, String> {
 
 #[tauri::command]
 fn search_apps(query: String) -> Vec<AppEntry> {
-    filter_apps(load_apps().unwrap_or_default(), &query)
+    filter_apps(visible_apps(load_apps().unwrap_or_default()), &query)
+}
+
+#[tauri::command]
+fn launch_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
+    let apps = launch_stored_app(&app_id).map_err(|error| error.to_string())?;
+    let _ = app.emit("apps-updated", apps.clone());
+    dismiss_window(&app, MAIN_LABEL);
+    Ok(apps)
+}
+
+#[tauri::command]
+fn hide_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
+    let apps = hide_stored_app(&app_id).map_err(|error| error.to_string())?;
+    let _ = app.emit("apps-updated", apps.clone());
+    Ok(apps)
 }
 
 #[tauri::command]
 fn dismiss_main_window(app: AppHandle) {
-    dismiss_window(&app, MAIN_LABEL);
-}
-
-#[tauri::command]
-fn dismiss_after_launch(app: AppHandle, app_name: String) {
-    println!("launch placeholder: {app_name}");
     dismiss_window(&app, MAIN_LABEL);
 }
 
@@ -236,8 +256,9 @@ fn store_apps(apps: &[AppEntry]) -> io::Result<()> {
 fn scan_store_and_emit(app: &AppHandle) -> io::Result<Vec<AppEntry>> {
     let apps = scan_configured_apps()?;
     store_apps(&apps)?;
-    let _ = app.emit("apps-updated", apps.clone());
-    Ok(apps)
+    let visible = visible_apps(apps);
+    let _ = app.emit("apps-updated", visible.clone());
+    Ok(visible)
 }
 
 fn filter_apps(apps: Vec<AppEntry>, query: &str) -> Vec<AppEntry> {
@@ -258,11 +279,141 @@ fn filter_apps(apps: Vec<AppEntry>, query: &str) -> Vec<AppEntry> {
         .collect()
 }
 
+fn visible_apps(mut apps: Vec<AppEntry>) -> Vec<AppEntry> {
+    sort_apps(&mut apps);
+    apps.into_iter().filter(|app| !app.hidden).collect()
+}
+
+fn sort_apps(apps: &mut [AppEntry]) {
+    apps.sort_by(|left, right| {
+        right
+            .launches
+            .cmp(&left.launches)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
+    });
+}
+
+fn launch_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let Some(index) = apps.iter().position(|app| app.id == app_id && !app.hidden) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "应用不存在或已隐藏",
+        ));
+    };
+
+    let launch_result = start_process(&apps[index]);
+    match launch_result {
+        Ok(()) => {
+            apps[index].launches = apps[index].launches.saturating_add(1);
+            apps[index].last_error.clear();
+            sort_apps(&mut apps);
+            store_apps(&apps)?;
+            Ok(visible_apps(apps))
+        }
+        Err(error) => {
+            apps[index].last_error = error.to_string();
+            store_apps(&apps)?;
+            Err(error)
+        }
+    }
+}
+
+fn hide_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let Some(app) = apps.iter_mut().find(|app| app.id == app_id) else {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "应用不存在"));
+    };
+
+    app.hidden = true;
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    Ok(visible_apps(apps))
+}
+
+fn start_process(app: &AppEntry) -> io::Result<()> {
+    let path = PathBuf::from(&app.path);
+    let args = split_launch_args(&app.launch_args)?;
+    let mut command = Command::new(&path);
+    command.args(args);
+
+    let working_dir = if app.working_dir.trim().is_empty() {
+        path.parent().map(Path::to_path_buf)
+    } else {
+        Some(PathBuf::from(app.working_dir.trim()))
+    };
+
+    if let Some(working_dir) = working_dir {
+        command.current_dir(working_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command.spawn().map(|_| ())
+}
+
+fn split_launch_args(value: &str) -> io::Result<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escaping = false;
+
+    for ch in value.chars() {
+        if escaping {
+            if ch != '"' && ch != '\\' {
+                current.push('\\');
+            }
+            current.push(ch);
+            escaping = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_quotes => escaping = true,
+            '"' => in_quotes = !in_quotes,
+            ch if ch.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if escaping {
+        current.push('\\');
+    }
+
+    if in_quotes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "启动参数引号不完整",
+        ));
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    Ok(args)
+}
+
 fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
     let settings = load_settings()?;
-    let previous_launches: HashMap<String, u32> = load_apps()?
+    let previous_metadata: HashMap<String, AppMetadata> = load_apps()?
         .into_iter()
-        .map(|app| (app.id, app.launches))
+        .map(|app| {
+            (
+                app.id,
+                AppMetadata {
+                    launches: app.launches,
+                    hidden: app.hidden,
+                    last_error: app.last_error,
+                },
+            )
+        })
         .collect();
     let mut apps = Vec::new();
     let mut seen = HashMap::<String, ()>::new();
@@ -272,21 +423,16 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
         if !root.is_dir() {
             continue;
         }
-        scan_directory(&root, &previous_launches, &mut seen, &mut apps)?;
+        scan_directory(&root, &previous_metadata, &mut seen, &mut apps)?;
     }
 
-    apps.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
-    });
+    sort_apps(&mut apps);
     Ok(apps)
 }
 
 fn scan_directory(
     root: &Path,
-    previous_launches: &HashMap<String, u32>,
+    previous_metadata: &HashMap<String, AppMetadata>,
     seen: &mut HashMap<String, ()>,
     apps: &mut Vec<AppEntry>,
 ) -> io::Result<()> {
@@ -335,10 +481,11 @@ fn scan_directory(
                     continue;
                 }
 
-                app_entry.launches = previous_launches
-                    .get(&app_entry.id)
-                    .copied()
-                    .unwrap_or_default();
+                if let Some(metadata) = previous_metadata.get(&app_entry.id) {
+                    app_entry.launches = metadata.launches;
+                    app_entry.hidden = metadata.hidden;
+                    app_entry.last_error = metadata.last_error.clone();
+                }
                 apps.push(app_entry);
             }
         }
@@ -431,6 +578,8 @@ fn build_app_entry(
         working_dir,
         launches: 0,
         source,
+        hidden: false,
+        last_error: String::new(),
     }
 }
 
@@ -589,6 +738,43 @@ mod tests {
             .into_iter()
             .map(|app| app.name)
             .collect()
+    }
+
+    fn sorted_names(mut apps: Vec<AppEntry>) -> Vec<String> {
+        sort_apps(&mut apps);
+        apps.into_iter().map(|app| app.name).collect()
+    }
+
+    #[test]
+    fn split_launch_args_handles_quotes() {
+        assert_eq!(
+            split_launch_args(r#"--profile "C:\Users\fengqi\App Data" --flag"#).unwrap(),
+            vec![
+                "--profile".to_string(),
+                r"C:\Users\fengqi\App Data".to_string(),
+                "--flag".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn split_launch_args_rejects_unclosed_quote() {
+        assert!(split_launch_args(r#"--profile "broken"#).is_err());
+    }
+
+    #[test]
+    fn sort_apps_orders_by_launch_count_then_name() {
+        let mut app_a = test_app("Beta");
+        app_a.launches = 2;
+        let mut app_b = test_app("Alpha");
+        app_b.launches = 5;
+        let mut app_c = test_app("ActivityWatch");
+        app_c.launches = 5;
+
+        assert_eq!(
+            sorted_names(vec![app_a, app_b, app_c]),
+            vec!["ActivityWatch", "Alpha", "Beta"]
+        );
     }
 
     #[test]
@@ -854,7 +1040,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             dismiss_main_window,
-            dismiss_after_launch,
+            launch_app,
+            hide_app,
             get_apps,
             scan_apps,
             search_apps,

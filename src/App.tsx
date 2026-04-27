@@ -15,6 +15,8 @@ type AppEntry = {
   initials: string;
   searchText: string;
   source: string;
+  hidden: boolean;
+  lastError: string;
 };
 
 type TooltipState = {
@@ -193,7 +195,39 @@ function LauncherWindow() {
   }
 
   async function launchApp(app: AppEntry) {
-    await invoke("dismiss_after_launch", { appName: app.name });
+    try {
+      const updatedApps = await invoke<AppEntry[]>("launch_app", {
+        appId: app.id,
+      });
+      setQuery("");
+      setApps(updatedApps);
+      setFilteredApps(updatedApps);
+      setTooltip(null);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+      const updatedApps = await invoke<AppEntry[]>("get_apps");
+      setApps(updatedApps);
+      if (!query.trim()) {
+        setFilteredApps(updatedApps);
+      }
+    }
+  }
+
+  async function hideApp(app: AppEntry) {
+    try {
+      const updatedApps = await invoke<AppEntry[]>("hide_app", {
+        appId: app.id,
+      });
+      setApps(updatedApps);
+      setFilteredApps((current) =>
+        current.filter((entry) => entry.id !== app.id),
+      );
+      setTooltip(null);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
   }
 
   async function scanApps() {
@@ -308,12 +342,25 @@ function LauncherWindow() {
               key={app.id}
               type="button"
               className="app-tile"
-              onDoubleClick={() => void launchApp(app)}
+              onClick={() => void launchApp(app)}
               onMouseEnter={(event) => showAppTooltip(app, event)}
               onMouseLeave={hideAppTooltip}
               onFocus={(event) => showAppTooltip(app, event)}
               onBlur={hideAppTooltip}
             >
+              <span
+                role="button"
+                tabIndex={-1}
+                className="app-hide"
+                title="隐藏"
+                aria-label={`隐藏 ${app.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void hideApp(app);
+                }}
+              >
+                ×
+              </span>
               <span className="app-icon" style={{ background: app.accent }}>
                 {app.initials}
               </span>
@@ -333,6 +380,12 @@ function LauncherWindow() {
           <span>路径: {tooltip.app.path}</span>
           {tooltip.app.launchArgs ? (
             <span>启动参数: {tooltip.app.launchArgs}</span>
+          ) : null}
+          {tooltip.app.workingDir ? (
+            <span>工作目录: {tooltip.app.workingDir}</span>
+          ) : null}
+          {tooltip.app.lastError ? (
+            <span className="tooltip-error">错误信息: {tooltip.app.lastError}</span>
           ) : null}
         </div>
       ) : null}

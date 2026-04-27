@@ -85,7 +85,9 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
     "accent": "#2563eb",
     "initials": "AP",
     "searchText": "appname app ap c:\\path\\app.exe",
-    "source": "C:\\Shortcut\\App.lnk"
+    "source": "C:\\Shortcut\\App.lnk",
+    "hidden": false,
+    "lastError": ""
   }
 ]
 ```
@@ -101,6 +103,10 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 当前 `.lnk` 解析使用 PowerShell 调用 Windows WScript Shell COM，后续如果扫描性能不够，再替换为 Rust 侧直接 COM 调用。
 - `initials` 和 `searchText` 在 Rust 扫描阶段生成；`searchText` 只保存普通文本、路径、英文分词和英文首字母。
 - 中文拼音搜索由 Rust 后端 `search_apps` 命令使用 `ib-pinyin` 执行，前端不要重复计算拼音索引。
+- 真实启动由 Rust 后端 `launch_app` 执行，使用条目中的路径、启动参数和工作目录。
+- 后端返回应用列表前统一排序：启动次数从大到小，次数相同按名称排序。
+- 前端单击应用条目启动应用，启动成功后清空搜索状态并刷新列表。
+- 条目隐藏由 Rust 后端 `hide_app` 执行，隐藏状态写入 `apps.json` 并在重新扫描时保留。
 - 当前主界面“添加”和设置里的“浏览”是保留入口，真实功能在后续阶段接入。
 - 用户要求调整功能、交互、产品规则时，同步更新文档中的最终版本描述。
 - 纯 bug 修复不用更新产品计划。
