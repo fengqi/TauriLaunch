@@ -28,6 +28,8 @@ const SETTINGS_LABEL: &str = "settings";
 const ABOUT_LABEL: &str = "about";
 const DEFAULT_RIGHT_OFFSET: i32 = 10;
 const DEFAULT_BOTTOM_OFFSET: i32 = 10;
+const DEFAULT_ICON_SIZE: u32 = 38;
+const AUTOSTART_NAME: &str = "TauriLaunch";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
@@ -45,6 +47,10 @@ fn default_startup_launch_mode() -> LaunchMode {
 
 fn default_manual_launch_mode() -> LaunchMode {
     LaunchMode::Window
+}
+
+fn default_icon_size() -> u32 {
+    DEFAULT_ICON_SIZE
 }
 
 fn default_watched_directories() -> Vec<String> {
@@ -73,6 +79,10 @@ struct AppSettings {
     startup_launch_mode: LaunchMode,
     #[serde(default = "default_manual_launch_mode")]
     manual_launch_mode: LaunchMode,
+    #[serde(default = "default_icon_size")]
+    icon_size: u32,
+    #[serde(default)]
+    autostart_enabled: bool,
     #[serde(default = "default_watched_directories")]
     watched_directories: Vec<String>,
 }
@@ -84,6 +94,8 @@ impl Default for AppSettings {
             window_bottom_offset: DEFAULT_BOTTOM_OFFSET,
             startup_launch_mode: default_startup_launch_mode(),
             manual_launch_mode: default_manual_launch_mode(),
+            icon_size: default_icon_size(),
+            autostart_enabled: is_autostart_enabled(),
             watched_directories: default_watched_directories(),
         }
     }
@@ -102,6 +114,8 @@ struct AppEntry {
     initials: String,
     #[serde(default)]
     search_text: String,
+    #[serde(default)]
+    icon_path: String,
     source: String,
     #[serde(default)]
     hidden: bool,
@@ -134,12 +148,17 @@ fn default_bottom_offset() -> i32 {
 
 #[tauri::command]
 fn get_settings() -> AppSettings {
-    load_settings().unwrap_or_default()
+    let mut settings = load_settings().unwrap_or_default();
+    settings.autostart_enabled = is_autostart_enabled();
+    settings
 }
 
 #[tauri::command]
-fn save_settings(settings: AppSettings) -> Result<(), String> {
-    store_settings(&settings).map_err(|error| error.to_string())
+fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+    configure_autostart(settings.autostart_enabled).map_err(|error| error.to_string())?;
+    store_settings(&settings).map_err(|error| error.to_string())?;
+    let _ = app.emit("settings-updated", settings);
+    Ok(())
 }
 
 #[tauri::command]
@@ -207,6 +226,10 @@ fn settings_path() -> io::Result<PathBuf> {
 
 fn apps_path() -> io::Result<PathBuf> {
     Ok(app_data_dir()?.join("apps.json"))
+}
+
+fn icons_dir() -> io::Result<PathBuf> {
+    Ok(app_data_dir()?.join("icons"))
 }
 
 fn load_settings() -> io::Result<AppSettings> {
@@ -557,6 +580,10 @@ fn powershell_single_quoted(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "''"))
 }
 
+fn powershell_single_quoted_text(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 fn build_app_entry(
     name: String,
     path: String,
@@ -571,6 +598,7 @@ fn build_app_entry(
         id: id.clone(),
         initials,
         search_text,
+        icon_path: ensure_icon_cache(&id, &source, &path).unwrap_or_default(),
         accent: accent_color(&id),
         name,
         path,
@@ -581,6 +609,153 @@ fn build_app_entry(
         hidden: false,
         last_error: String::new(),
     }
+}
+
+fn ensure_icon_cache(id: &str, source: &str, path: &str) -> io::Result<String> {
+    let directory = icons_dir()?;
+    fs::create_dir_all(&directory)?;
+    let icon_path = directory.join(format!("{id}.png"));
+
+    if icon_path.exists() {
+        return Ok(icon_path.to_string_lossy().into_owned());
+    }
+
+    extract_icon_to_png(source, path, &icon_path)?;
+    Ok(icon_path.to_string_lossy().into_owned())
+}
+
+fn extract_icon_to_png(source: &str, path: &str, output: &Path) -> io::Result<()> {
+    let source = powershell_single_quoted_text(source);
+    let path = powershell_single_quoted_text(path);
+    let output = powershell_single_quoted(output);
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$outputPath = {output}
+$candidates = @({source}, {path})
+$icon = $null
+foreach ($candidate in $candidates) {{
+  if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {{
+    continue
+  }}
+  try {{
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($candidate)
+    if ($null -ne $icon) {{
+      break
+    }}
+  }} catch {{}}
+}}
+if ($null -eq $icon) {{
+  exit 1
+}}
+$bitmap = $icon.ToBitmap()
+$bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+$bitmap.Dispose()
+$icon.Dispose()
+"#
+    );
+
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    ))
+}
+
+fn configure_autostart(enabled: bool) -> io::Result<()> {
+    if enabled {
+        enable_autostart()
+    } else {
+        disable_autostart()
+    }
+}
+
+fn is_autostart_enabled() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                AUTOSTART_NAME,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+
+        return output
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    false
+}
+
+fn enable_autostart() -> io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let exe = std::env::current_exe()?;
+        let command_value = format!("\"{}\" --startup", exe.to_string_lossy());
+        let status = Command::new("reg")
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                AUTOSTART_NAME,
+                "/t",
+                "REG_SZ",
+                "/d",
+                &command_value,
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+
+        if status.success() {
+            return Ok(());
+        }
+
+        return Err(io::Error::new(io::ErrorKind::Other, "写入开机启动失败"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    Ok(())
+}
+
+fn disable_autostart() -> io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("reg")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                AUTOSTART_NAME,
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+
+        if status.success() || !is_autostart_enabled() {
+            return Ok(());
+        }
+
+        return Err(io::Error::new(io::ErrorKind::Other, "移除开机启动失败"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    Ok(())
 }
 
 fn stable_id(source: &str, path: &str, launch_args: &str) -> String {
@@ -1024,6 +1199,7 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             create_tray(app)?;
             let scan_app = app.handle().clone();

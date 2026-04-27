@@ -57,6 +57,8 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
   "windowBottomOffset": 10,
   "startupLaunchMode": "tray",
   "manualLaunchMode": "window",
+  "iconSize": 38,
+  "autostartEnabled": false,
   "watchedDirectories": [
     "C:\\Users\\fengqi\\Desktop\\App",
     "C:\\Users\\fengqi\\Desktop\\Game",
@@ -85,6 +87,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
     "accent": "#2563eb",
     "initials": "AP",
     "searchText": "appname app ap c:\\path\\app.exe",
+    "iconPath": "C:\\Users\\fengqi\\AppData\\Local\\com.fengqi.taurilaunch\\icons\\stable-id.png",
     "source": "C:\\Shortcut\\App.lnk",
     "hidden": false,
     "lastError": ""
@@ -100,6 +103,8 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 普通双击启动默认显示主窗口，可在设置中改为启动到托盘。
 - 托盘菜单 `退出` 才真正退出整个进程。
 - 托盘 `轻量模式` 只在当前进程内生效，不保存到 JSON。
+- 开机启动设置写入当前用户 `Run` 注册表项，启动参数为 `--startup`。
+- 图标缓存路径为 `%LOCALAPPDATA%\com.fengqi.taurilaunch\icons\{id}.png`。
 - 当前 `.lnk` 解析使用 PowerShell 调用 Windows WScript Shell COM，后续如果扫描性能不够，再替换为 Rust 侧直接 COM 调用。
 - `initials` 和 `searchText` 在 Rust 扫描阶段生成；`searchText` 只保存普通文本、路径、英文分词和英文首字母。
 - 中文拼音搜索由 Rust 后端 `search_apps` 命令使用 `ib-pinyin` 执行，前端不要重复计算拼音索引。
@@ -107,7 +112,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 后端返回应用列表前统一排序：启动次数从大到小，次数相同按名称排序。
 - 前端单击应用条目启动应用，启动成功后清空搜索状态并刷新列表。
 - 条目隐藏由 Rust 后端 `hide_app` 执行，隐藏状态写入 `apps.json` 并在重新扫描时保留。
-- 当前主界面“添加”和设置里的“浏览”是保留入口，真实功能在后续阶段接入。
+- 当前主界面“添加”是保留入口，真实功能在后续阶段接入。
 - 用户要求调整功能、交互、产品规则时，同步更新文档中的最终版本描述。
 - 纯 bug 修复不用更新产品计划。
 - 文档不要使用临时补充段落堆叠历史，只保留当前有效规则。

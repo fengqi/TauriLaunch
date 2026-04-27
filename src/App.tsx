@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from "react";
 import "./App.css";
@@ -14,6 +15,7 @@ type AppEntry = {
   accent: string;
   initials: string;
   searchText: string;
+  iconPath: string;
   source: string;
   hidden: boolean;
   lastError: string;
@@ -36,6 +38,8 @@ type AppSettings = {
   windowBottomOffset: number;
   startupLaunchMode: LaunchMode;
   manualLaunchMode: LaunchMode;
+  iconSize: number;
+  autostartEnabled: boolean;
   watchedDirectories: string[];
 };
 
@@ -46,6 +50,8 @@ const defaultSettings: AppSettings = {
   windowBottomOffset: 10,
   startupLaunchMode: "tray",
   manualLaunchMode: "window",
+  iconSize: 38,
+  autostartEnabled: false,
   watchedDirectories: [
     "C:\\Users\\fengqi\\Desktop\\App",
     "C:\\Users\\fengqi\\Desktop\\Game",
@@ -81,6 +87,7 @@ function LauncherWindow() {
   const [filteredApps, setFilteredApps] = useState<AppEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [iconSize, setIconSize] = useState(defaultSettings.iconSize);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({
     left: 0,
@@ -116,10 +123,30 @@ function LauncherWindow() {
       setFilteredApps(event.payload);
       setLoading(false);
     });
+    const unlistenSettings = listen<AppSettings>("settings-updated", (event) => {
+      setIconSize(event.payload.iconSize || defaultSettings.iconSize);
+    });
 
     return () => {
       canceled = true;
       void unlisten.then((dispose) => dispose());
+      void unlistenSettings.then((dispose) => dispose());
+    };
+  }, []);
+
+  useEffect(() => {
+    let canceled = false;
+
+    invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (!canceled) {
+          setIconSize(settings.iconSize || defaultSettings.iconSize);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      canceled = true;
     };
   }, []);
 
@@ -330,13 +357,19 @@ function LauncherWindow() {
       {loading ? (
         <section className="app-state">正在扫描应用...</section>
       ) : error ? (
-        <section className="app-state error-state">{error}</section>
+        <section className="app-state error-state">扫描失败：{error}</section>
       ) : filteredApps.length === 0 ? (
         <section className="app-state">
-          未找到应用，可在设置里添加监听目录后点击扫描。
+          {query.trim()
+            ? "没有匹配的应用。"
+            : "未找到应用。请在设置里添加监听目录，或确认目录中存在 .exe / .lnk 文件。"}
         </section>
       ) : (
-        <section className="app-grid" aria-label="应用列表">
+        <section
+          className="app-grid"
+          aria-label="应用列表"
+          style={{ "--app-icon-size": `${iconSize}px` } as CSSProperties}
+        >
           {filteredApps.map((app) => (
             <button
               key={app.id}
@@ -361,9 +394,15 @@ function LauncherWindow() {
               >
                 ×
               </span>
-              <span className="app-icon" style={{ background: app.accent }}>
-                {app.initials}
-              </span>
+              {app.iconPath ? (
+                <span className="app-icon image-icon">
+                  <img src={convertFileSrc(app.iconPath)} alt="" />
+                </span>
+              ) : (
+                <span className="app-icon" style={{ background: app.accent }}>
+                  {app.initials}
+                </span>
+              )}
               <span className="app-name">{app.name}</span>
             </button>
           ))}
@@ -409,6 +448,8 @@ function SettingsWindow() {
           setSettings({
             ...defaultSettings,
             ...loaded,
+            iconSize: loaded.iconSize || defaultSettings.iconSize,
+            autostartEnabled: Boolean(loaded.autostartEnabled),
             watchedDirectories:
               loaded.watchedDirectories ?? defaultSettings.watchedDirectories,
           });
@@ -461,6 +502,32 @@ function SettingsWindow() {
       ...current,
       [name]: value,
     }));
+  }
+
+  function updateIconSize(value: string) {
+    const iconSize = Number.parseInt(value, 10);
+    if (![32, 38, 48, 64].includes(iconSize)) {
+      return;
+    }
+
+    setSettings((current) => ({
+      ...current,
+      iconSize,
+    }));
+  }
+
+  async function chooseDirectory() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+    });
+
+    if (typeof selected !== "string") {
+      return;
+    }
+
+    setDirectoryInput(selected);
+    setSelectedDirectory(selected);
   }
 
   function addDirectory() {
@@ -534,7 +601,9 @@ function SettingsWindow() {
                 }
               }}
             />
-            <button type="button">浏览</button>
+            <button type="button" onClick={() => void chooseDirectory()}>
+              浏览
+            </button>
             <button type="button" onClick={addDirectory}>
               添加
             </button>
@@ -552,10 +621,14 @@ function SettingsWindow() {
           <h2>图标设置</h2>
           <label>
             <span>图标大小</span>
-            <select defaultValue="32x32">
-              <option>32x32</option>
-              <option>48x48</option>
-              <option>64x64</option>
+            <select
+              value={String(settings.iconSize)}
+              onChange={(event) => updateIconSize(event.currentTarget.value)}
+            >
+              <option value="32">32x32</option>
+              <option value="38">38x38</option>
+              <option value="48">48x48</option>
+              <option value="64">64x64</option>
             </select>
           </label>
         </div>
@@ -644,7 +717,16 @@ function SettingsWindow() {
           </label>
           <label className="checkbox-row">
             <span>开机启动</span>
-            <input type="checkbox" defaultChecked />
+            <input
+              type="checkbox"
+              checked={settings.autostartEnabled}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  autostartEnabled: event.currentTarget.checked,
+                }))
+              }
+            />
           </label>
         </div>
       );
