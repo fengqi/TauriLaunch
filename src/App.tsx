@@ -106,8 +106,29 @@ function LauncherWindow() {
     top: 0,
     visibility: "hidden",
   });
+  const appsRef = useRef<AppEntry[]>([]);
+  const queryRef = useRef("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  function focusSearchInput() {
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+  }
+
+  function clearSearch() {
+    setQuery("");
+    setFilteredApps(appsRef.current);
+    setTooltip(null);
+  }
+
+  useEffect(() => {
+    appsRef.current = apps;
+  }, [apps]);
+
+  useEffect(() => {
+    queryRef.current = query;
+  }, [query]);
 
   useEffect(() => {
     let canceled = false;
@@ -133,17 +154,43 @@ function LauncherWindow() {
 
     const unlisten = listen<AppEntry[]>("apps-updated", (event) => {
       setApps(event.payload);
-      setFilteredApps(event.payload);
       setLoading(false);
+      const keyword = queryRef.current.trim();
+      if (!keyword) {
+        setFilteredApps(event.payload);
+        return;
+      }
+
+      void invoke<AppEntry[]>("search_apps", { query: keyword })
+        .then((result) => {
+          if (queryRef.current.trim() === keyword) {
+            setFilteredApps(result);
+          }
+        })
+        .catch((reason) => setError(String(reason)));
     });
     const unlistenSettings = listen<AppSettings>("settings-updated", (event) => {
       setIconSize(event.payload.iconSize || defaultSettings.iconSize);
     });
+    const unlistenDismissed = listen("main-window-dismissed", () => {
+      clearSearch();
+    });
+    const unlistenScanFailed = listen<string>("scan-failed", (event) => {
+      setError(event.payload);
+    });
+    const unlistenFocusSearch = listen("focus-search", () => {
+      focusSearchInput();
+    });
+
+    focusSearchInput();
 
     return () => {
       canceled = true;
       void unlisten.then((dispose) => dispose());
       void unlistenSettings.then((dispose) => dispose());
+      void unlistenDismissed.then((dispose) => dispose());
+      void unlistenScanFailed.then((dispose) => dispose());
+      void unlistenFocusSearch.then((dispose) => dispose());
     };
   }, []);
 
@@ -238,6 +285,7 @@ function LauncherWindow() {
   }, [editingAppId]);
 
   async function closeMainWindow() {
+    clearSearch();
     await invoke("dismiss_main_window");
   }
 
@@ -250,7 +298,7 @@ function LauncherWindow() {
       const updatedApps = await invoke<AppEntry[]>("launch_app", {
         appId: app.id,
       });
-      setQuery("");
+      clearSearch();
       setApps(updatedApps);
       setFilteredApps(updatedApps);
       setTooltip(null);
@@ -357,21 +405,48 @@ function LauncherWindow() {
   }
 
   async function scanApps() {
-    setLoading(true);
     try {
-      const scanned = await invoke<AppEntry[]>("scan_apps");
-      setApps(scanned);
+      await invoke("scan_apps");
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function addApp() {
+    try {
+      await invoke("set_main_dialog_open", { open: true });
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        filters: [
+          {
+            name: "应用",
+            extensions: ["exe", "lnk"],
+          },
+        ],
+      });
+
+      if (typeof selected !== "string") {
+        return;
+      }
+
+      const updatedApps = await invoke<AppEntry[]>("add_app", {
+        path: selected,
+      });
+      setApps(updatedApps);
       if (!query.trim()) {
-        setFilteredApps(scanned);
+        setFilteredApps(updatedApps);
       } else {
         const result = await invoke<AppEntry[]>("search_apps", { query });
         setFilteredApps(result);
       }
+      setTooltip(null);
       setError("");
     } catch (reason) {
       setError(String(reason));
     } finally {
-      setLoading(false);
+      await invoke("set_main_dialog_open", { open: false }).catch(() => undefined);
     }
   }
 
@@ -450,20 +525,30 @@ function LauncherWindow() {
           <span>应用列表</span>
         </div>
         <div className="toolbar">
-          <label className="search-box">
+          <div className="search-box">
             <span aria-hidden="true">⌕</span>
             <input
+              aria-label="搜索应用"
+              ref={searchInputRef}
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
               onKeyDown={handleSearchKeyDown}
               placeholder="搜索应用"
             />
-          </label>
+            {query ? (
+              <button
+                type="button"
+                className="search-clear"
+                aria-label="清空搜索"
+                onClick={clearSearch}
+              />
+            ) : null}
+          </div>
           <button type="button" className="toolbar-button" onClick={scanApps}>
             <span aria-hidden="true">↻</span>
             扫描
           </button>
-          <button type="button" className="toolbar-button">
+          <button type="button" className="toolbar-button" onClick={addApp}>
             <span aria-hidden="true">＋</span>
             添加
           </button>

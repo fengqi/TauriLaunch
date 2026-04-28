@@ -1,7 +1,9 @@
 use ib_pinyin::{matcher::PinyinMatcher, pinyin::PinyinNotation};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+use std::ffi::OsStr;
+#[cfg(target_os = "windows")]
+use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -22,6 +24,8 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
 
 const MAIN_LABEL: &str = "main";
 const SETTINGS_LABEL: &str = "settings";
@@ -32,7 +36,11 @@ const DEFAULT_ICON_SIZE: u32 = 38;
 const AUTOSTART_NAME: &str = "TauriLaunch";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const ERROR_ELEVATION_REQUIRED: i32 = 740;
 static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
+static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
+static MAIN_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -170,13 +178,23 @@ fn get_apps() -> Vec<AppEntry> {
 }
 
 #[tauri::command]
-fn scan_apps(app: AppHandle) -> Result<Vec<AppEntry>, String> {
-    scan_store_and_emit(&app).map_err(|error| error.to_string())
+fn scan_apps(app: AppHandle) {
+    spawn_scan(app);
+}
+
+#[tauri::command]
+fn set_main_dialog_open(open: bool) {
+    MAIN_DIALOG_OPEN.store(open, Ordering::Relaxed);
 }
 
 #[tauri::command]
 fn search_apps(query: String) -> Vec<AppEntry> {
     filter_apps(visible_apps(load_apps().unwrap_or_default()), &query)
+}
+
+#[tauri::command]
+fn add_app(path: String) -> Result<Vec<AppEntry>, String> {
+    add_app_from_source(Path::new(&path)).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -305,12 +323,50 @@ fn store_apps(apps: &[AppEntry]) -> io::Result<()> {
     fs::write(path, content)
 }
 
+fn spawn_scan(app: AppHandle) {
+    if SCAN_RUNNING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+
+    thread::spawn(move || {
+        if let Err(error) = scan_store_and_emit(&app) {
+            eprintln!("scan failed: {error}");
+            emit_scan_failed_to_visible_main(&app, &error.to_string());
+        }
+        SCAN_RUNNING.store(false, Ordering::Relaxed);
+    });
+}
+
 fn scan_store_and_emit(app: &AppHandle) -> io::Result<Vec<AppEntry>> {
     let apps = scan_configured_apps()?;
     store_apps(&apps)?;
     let visible = visible_apps(apps);
-    let _ = app.emit("apps-updated", visible.clone());
+    emit_apps_updated_to_visible_main(app, &visible);
     Ok(visible)
+}
+
+fn emit_apps_updated_to_visible_main(app: &AppHandle, apps: &[AppEntry]) {
+    let Some(window) = app.get_webview_window(MAIN_LABEL) else {
+        return;
+    };
+
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+
+    let _ = window.emit("apps-updated", apps.to_vec());
+}
+
+fn emit_scan_failed_to_visible_main(app: &AppHandle, error: &str) {
+    let Some(window) = app.get_webview_window(MAIN_LABEL) else {
+        return;
+    };
+
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+
+    let _ = window.emit("scan-failed", error.to_string());
 }
 
 fn filter_apps(apps: Vec<AppEntry>, query: &str) -> Vec<AppEntry> {
@@ -344,6 +400,61 @@ fn sort_apps(apps: &mut [AppEntry]) {
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
     });
+}
+
+fn add_app_from_source(source: &Path) -> io::Result<Vec<AppEntry>> {
+    let mut app_entry = app_entry_from_source(source)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "请选择有效的 .exe 或 .lnk 文件",
+        )
+    })?;
+
+    if app_entry.path.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "应用启动路径为空",
+        ));
+    }
+
+    let mut apps = load_apps()?;
+    if let Some(existing) = apps.iter_mut().find(|app| app.id == app_entry.id) {
+        if existing.hidden {
+            app_entry.custom_name = existing.custom_name.clone();
+            if !app_entry.custom_name.trim().is_empty() {
+                apply_display_name(&mut app_entry, existing.custom_name.clone());
+            }
+            app_entry.hidden = false;
+            app_entry.launches = 0;
+            *existing = app_entry;
+        }
+        sort_apps(&mut apps);
+        store_apps(&apps)?;
+        return Ok(visible_apps(apps));
+    }
+
+    if let Some(existing) = apps
+        .iter_mut()
+        .find(|app| normalize_key(&app.source) == normalize_key(&app_entry.source))
+    {
+        if existing.hidden {
+            app_entry.custom_name = existing.custom_name.clone();
+            if !app_entry.custom_name.trim().is_empty() {
+                apply_display_name(&mut app_entry, existing.custom_name.clone());
+            }
+            app_entry.hidden = false;
+            app_entry.launches = 0;
+            *existing = app_entry;
+        }
+        sort_apps(&mut apps);
+        store_apps(&apps)?;
+        return Ok(visible_apps(apps));
+    }
+
+    apps.push(app_entry);
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    Ok(visible_apps(apps))
 }
 
 fn launch_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
@@ -472,14 +583,62 @@ fn start_process(app: &AppEntry) -> io::Result<()> {
         Some(PathBuf::from(app.working_dir.trim()))
     };
 
-    if let Some(working_dir) = working_dir {
+    if let Some(working_dir) = &working_dir {
         command.current_dir(working_dir);
     }
 
     #[cfg(target_os = "windows")]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    command.spawn().map(|_| ())
+    match command.spawn() {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            #[cfg(target_os = "windows")]
+            {
+                if error.raw_os_error() == Some(ERROR_ELEVATION_REQUIRED) {
+                    return shell_execute_runas(app, working_dir.as_deref());
+                }
+            }
+
+            Err(error)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn shell_execute_runas(app: &AppEntry, working_dir: Option<&Path>) -> io::Result<()> {
+    let operation = wide_null("runas");
+    let file = wide_null(app.path.trim());
+    let parameters = wide_null(app.launch_args.trim());
+    let directory_text = working_dir
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let directory = wide_null(directory_text.as_str());
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            file.as_ptr(),
+            parameters.as_ptr(),
+            if directory_text.is_empty() {
+                std::ptr::null()
+            } else {
+                directory.as_ptr()
+            },
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if result as isize > 32 {
+        return Ok(());
+    }
+
+    Err(io::Error::from_raw_os_error(result as i32))
+}
+
+#[cfg(target_os = "windows")]
+fn wide_null(value: &str) -> Vec<u16> {
+    OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
 fn split_launch_args(value: &str) -> io::Result<Vec<String>> {
@@ -530,19 +689,18 @@ fn split_launch_args(value: &str) -> io::Result<Vec<String>> {
 
 fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
     let settings = load_settings()?;
-    let previous_metadata: HashMap<String, AppMetadata> = load_apps()?
+    let previous_apps = load_apps()?;
+    let previous_metadata: HashMap<String, AppMetadata> = previous_apps
+        .iter()
+        .map(|app| (app.id.clone(), metadata_from_app(app)))
+        .collect();
+    let previous_source_metadata: HashMap<String, AppMetadata> = previous_apps
+        .iter()
+        .map(|app| (normalize_key(&app.source), metadata_from_app(app)))
+        .collect();
+    let previous_by_source: HashMap<String, AppEntry> = previous_apps
         .into_iter()
-        .map(|app| {
-            (
-                app.id,
-                AppMetadata {
-                    launches: app.launches,
-                    custom_name: app.custom_name,
-                    hidden: app.hidden,
-                    last_error: app.last_error,
-                },
-            )
-        })
+        .map(|app| (normalize_key(&app.source), app))
         .collect();
     let mut apps = Vec::new();
     let mut seen = HashMap::<String, ()>::new();
@@ -552,7 +710,14 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
         if !root.is_dir() {
             continue;
         }
-        scan_directory(&root, &previous_metadata, &mut seen, &mut apps)?;
+        scan_directory(
+            &root,
+            &previous_metadata,
+            &previous_source_metadata,
+            &previous_by_source,
+            &mut seen,
+            &mut apps,
+        )?;
     }
 
     sort_apps(&mut apps);
@@ -562,6 +727,8 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
 fn scan_directory(
     root: &Path,
     previous_metadata: &HashMap<String, AppMetadata>,
+    previous_source_metadata: &HashMap<String, AppMetadata>,
+    previous_by_source: &HashMap<String, AppEntry>,
     seen: &mut HashMap<String, ()>,
     apps: &mut Vec<AppEntry>,
 ) -> io::Result<()> {
@@ -588,9 +755,25 @@ fn scan_directory(
                 .unwrap_or_default()
                 .to_lowercase();
 
+            let source_key = normalize_key(path.to_string_lossy().as_ref());
+            let previous_app = previous_by_source.get(&source_key);
+            let refresh_icon = previous_app.is_some();
             let app_entry = match extension.as_str() {
-                "exe" => Some(app_entry_from_exe(&path)),
-                "lnk" => app_entry_from_shortcut(&path),
+                "exe" | "lnk" => {
+                    if let Some(previous_app) =
+                        previous_app.filter(|app| can_reuse_scanned_app(app))
+                    {
+                        if push_scanned_app(previous_app.clone(), seen, apps) {
+                            continue;
+                        }
+                    }
+
+                    match extension.as_str() {
+                        "exe" => Some(app_entry_from_exe(&path, refresh_icon)),
+                        "lnk" => app_entry_from_shortcut(&path, refresh_icon),
+                        _ => None,
+                    }
+                }
                 _ => None,
             };
 
@@ -599,18 +782,10 @@ fn scan_directory(
                     continue;
                 }
 
-                let dedupe_key = format!(
-                    "{}\n{}\n{}",
-                    app_entry.path.to_lowercase(),
-                    app_entry.launch_args,
-                    app_entry.source.to_lowercase()
-                );
-
-                if seen.insert(dedupe_key, ()).is_some() {
-                    continue;
-                }
-
-                if let Some(metadata) = previous_metadata.get(&app_entry.id) {
+                if let Some(metadata) = previous_metadata
+                    .get(&app_entry.id)
+                    .or_else(|| previous_source_metadata.get(&normalize_key(&app_entry.source)))
+                {
                     app_entry.launches = metadata.launches;
                     app_entry.hidden = metadata.hidden;
                     app_entry.last_error = metadata.last_error.clone();
@@ -619,7 +794,7 @@ fn scan_directory(
                         apply_display_name(&mut app_entry, metadata.custom_name.clone());
                     }
                 }
-                apps.push(app_entry);
+                push_scanned_app(app_entry, seen, apps);
             }
         }
     }
@@ -627,7 +802,93 @@ fn scan_directory(
     Ok(())
 }
 
-fn app_entry_from_exe(path: &Path) -> AppEntry {
+fn app_entry_from_source(path: &Path) -> io::Result<Option<AppEntry>> {
+    if !path.is_file() {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "文件不存在"));
+    }
+
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+
+    Ok(match extension.as_str() {
+        "exe" => Some(app_entry_from_exe(path, false)),
+        "lnk" => app_entry_from_shortcut(path, false),
+        _ => None,
+    })
+}
+
+fn metadata_from_app(app: &AppEntry) -> AppMetadata {
+    AppMetadata {
+        launches: app.launches,
+        custom_name: app.custom_name.clone(),
+        hidden: app.hidden,
+        last_error: app.last_error.clone(),
+    }
+}
+
+fn push_scanned_app(
+    app: AppEntry,
+    seen: &mut HashMap<String, ()>,
+    apps: &mut Vec<AppEntry>,
+) -> bool {
+    if seen.insert(scan_dedupe_key(&app), ()).is_some() {
+        return false;
+    }
+
+    apps.push(app);
+    true
+}
+
+fn scan_dedupe_key(app: &AppEntry) -> String {
+    format!(
+        "{}\n{}\n{}",
+        normalize_key(&app.path),
+        app.launch_args,
+        normalize_key(&app.source)
+    )
+}
+
+fn normalize_key(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn can_reuse_scanned_app(app: &AppEntry) -> bool {
+    app_launch_target_exists(app)
+        && app_icon_cache_current(app).unwrap_or(false)
+        && split_launch_args(&app.launch_args).is_ok()
+}
+
+fn app_launch_target_exists(app: &AppEntry) -> bool {
+    let path = Path::new(app.path.trim());
+    if app.path.trim().is_empty() || !path.is_file() {
+        return false;
+    }
+
+    let working_dir = app.working_dir.trim();
+    if working_dir.is_empty() {
+        return true;
+    }
+
+    Path::new(working_dir).is_dir()
+}
+
+fn app_icon_cache_current(app: &AppEntry) -> io::Result<bool> {
+    let icon_path = app.icon_path.trim();
+    if icon_path.is_empty() {
+        return Ok(false);
+    }
+
+    let icon_path = Path::new(icon_path);
+    let expected_icon_path = expected_icon_cache_path(&app.id)?;
+    Ok(normalize_key(icon_path.to_string_lossy().as_ref())
+        == normalize_key(expected_icon_path.to_string_lossy().as_ref())
+        && icon_path.is_file())
+}
+
+fn app_entry_from_exe(path: &Path, refresh_icon: bool) -> AppEntry {
     let path_text = path.to_string_lossy().into_owned();
     let name = file_stem(path);
     build_app_entry(
@@ -636,13 +897,14 @@ fn app_entry_from_exe(path: &Path) -> AppEntry {
         String::new(),
         parent_dir(path),
         path_text,
+        refresh_icon,
     )
 }
 
-fn app_entry_from_shortcut(path: &Path) -> Option<AppEntry> {
+fn app_entry_from_shortcut(path: &Path, refresh_icon: bool) -> Option<AppEntry> {
     let shortcut = read_shortcut(path)?;
     let target_path = shortcut.target_path.trim().to_string();
-    if target_path.is_empty() {
+    if target_path.is_empty() || !Path::new(&target_path).is_file() {
         return None;
     }
 
@@ -653,6 +915,7 @@ fn app_entry_from_shortcut(path: &Path) -> Option<AppEntry> {
         shortcut.arguments.trim().to_string(),
         shortcut.working_directory.trim().to_string(),
         path.to_string_lossy().into_owned(),
+        refresh_icon,
     ))
 }
 
@@ -700,6 +963,7 @@ fn build_app_entry(
     launch_args: String,
     working_dir: String,
     source: String,
+    refresh_icon: bool,
 ) -> AppEntry {
     let id = stable_id(&source, &path, &launch_args);
     let initials = initials(&name);
@@ -709,7 +973,7 @@ fn build_app_entry(
         custom_name: String::new(),
         initials,
         search_text,
-        icon_path: ensure_icon_cache(&id, &source, &path).unwrap_or_default(),
+        icon_path: ensure_icon_cache(&id, &source, &path, refresh_icon).unwrap_or_default(),
         accent: accent_color(&id),
         name,
         path,
@@ -735,13 +999,22 @@ fn apply_display_name(app: &mut AppEntry, name: String) {
     );
 }
 
-fn ensure_icon_cache(id: &str, source: &str, path: &str) -> io::Result<String> {
-    let directory = icons_dir()?;
-    fs::create_dir_all(&directory)?;
-    let icon_path = directory.join(format!("{id}-256.png"));
+fn expected_icon_cache_path(id: &str) -> io::Result<PathBuf> {
+    Ok(icons_dir()?.join(format!("{id}-256.png")))
+}
 
-    if icon_path.exists() {
+fn ensure_icon_cache(id: &str, source: &str, path: &str, refresh: bool) -> io::Result<String> {
+    let icon_path = expected_icon_cache_path(id)?;
+    if let Some(directory) = icon_path.parent() {
+        fs::create_dir_all(directory)?;
+    }
+
+    if icon_path.exists() && !refresh {
         return Ok(icon_path.to_string_lossy().into_owned());
+    }
+
+    if refresh && icon_path.exists() {
+        let _ = fs::remove_file(&icon_path);
     }
 
     extract_icon_to_png(source, path, &icon_path)?;
@@ -769,7 +1042,7 @@ public static class IconNative {{
 }}
 "@
 $outputPath = {output}
-$candidates = @({source}, {path})
+$candidates = @({path}, {source})
 $sizes = @(256, 128, 64, 48, 32)
 foreach ($candidate in $candidates) {{
   if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {{
@@ -1063,6 +1336,7 @@ mod tests {
             String::new(),
             format!(r"C:\Apps\{name}"),
             format!(r"C:\Apps\{name}\{name}.lnk"),
+            false,
         )
     }
 
@@ -1142,6 +1416,10 @@ fn dismiss_window(app: &AppHandle, label: &str) {
 }
 
 fn dismiss_webview_window(window: &WebviewWindow) {
+    if window.label() == MAIN_LABEL {
+        let _ = window.emit("main-window-dismissed", ());
+    }
+
     if lightweight_mode_enabled() {
         let _ = window.destroy();
     } else {
@@ -1163,6 +1441,7 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.set_skip_taskbar(true);
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.emit("focus-search", ());
         return;
     }
 
@@ -1181,6 +1460,7 @@ fn show_main_window(app: &AppHandle) {
             position_main_window(&window);
             let _ = window.show();
             let _ = window.set_focus();
+            let _ = window.emit("focus-search", ());
         }
         Err(error) => eprintln!("failed to create main window: {error}"),
     }
@@ -1273,11 +1553,16 @@ fn attach_main_window_events(window: WebviewWindow) {
             was_focused.store(true, Ordering::Relaxed);
         }
         WindowEvent::Focused(false) => {
+            if MAIN_DIALOG_OPEN.load(Ordering::Relaxed) {
+                return;
+            }
+
             let close_window = close_window.clone();
             let was_focused = was_focused.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(120));
                 if was_focused.load(Ordering::Relaxed)
+                    && !MAIN_DIALOG_OPEN.load(Ordering::Relaxed)
                     && !close_window.is_focused().unwrap_or(false)
                     && close_window.is_visible().unwrap_or(false)
                 {
@@ -1319,10 +1604,7 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
         .tooltip("TauriLaunch")
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "about" => show_about_window(app),
-            "scan" => match scan_store_and_emit(app) {
-                Ok(apps) => println!("scanned {} apps", apps.len()),
-                Err(error) => eprintln!("scan failed: {error}"),
-            },
+            "scan" => spawn_scan(app.clone()),
             "settings" => show_settings_window(app),
             "lightweight" => {
                 let checked = lightweight_for_event.is_checked().unwrap_or(false);
@@ -1360,12 +1642,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             create_tray(app)?;
-            let scan_app = app.handle().clone();
-            thread::spawn(move || {
-                if let Err(error) = scan_store_and_emit(&scan_app) {
-                    eprintln!("startup scan failed: {error}");
-                }
-            });
+            spawn_scan(app.handle().clone());
             let settings = load_settings().unwrap_or_default();
             if should_show_main_window_on_launch(&settings) {
                 show_main_window(app.handle());
@@ -1382,7 +1659,9 @@ pub fn run() {
             open_app_directory,
             get_apps,
             scan_apps,
+            set_main_dialog_open,
             search_apps,
+            add_app,
             get_settings,
             save_settings,
             close_settings_window
