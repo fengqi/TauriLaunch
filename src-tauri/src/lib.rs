@@ -6,7 +6,7 @@ use std::ffi::OsStr;
 use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc,
+    Arc, Mutex, OnceLock,
 };
 use std::{
     collections::{hash_map::DefaultHasher, HashMap},
@@ -45,6 +45,7 @@ static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 static MAIN_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 static MAIN_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static SETTINGS_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SCAN_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -334,16 +335,34 @@ fn store_apps(apps: &[AppEntry]) -> io::Result<()> {
 
 fn spawn_scan(app: AppHandle) {
     if SCAN_RUNNING.swap(true, Ordering::Relaxed) {
+        emit_scan_state(&app, true);
         return;
     }
 
+    set_scan_active(&app, true);
     thread::spawn(move || {
         if let Err(error) = scan_store_and_emit(&app) {
             eprintln!("scan failed: {error}");
             emit_scan_failed_to_visible_main(&app, &error.to_string());
         }
         SCAN_RUNNING.store(false, Ordering::Relaxed);
+        set_scan_active(&app, false);
     });
+}
+
+fn set_scan_active(app: &AppHandle, active: bool) {
+    if let Some(item) = SCAN_MENU_ITEM
+        .get()
+        .and_then(|item| item.lock().ok().and_then(|item| item.clone()))
+    {
+        let _ = item.set_enabled(!active);
+    }
+
+    emit_scan_state(app, active);
+}
+
+fn emit_scan_state(app: &AppHandle, active: bool) {
+    let _ = app.emit("scan-state-changed", active);
 }
 
 fn scan_store_and_emit(app: &AppHandle) -> io::Result<Vec<AppEntry>> {
@@ -775,6 +794,10 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
         .iter()
         .map(|app| (normalize_key(&app.source), metadata_from_app(app)))
         .collect();
+    let previous_launch_metadata: HashMap<String, AppMetadata> = previous_apps
+        .iter()
+        .map(|app| (launch_metadata_key(app), metadata_from_app(app)))
+        .collect();
     let previous_by_source: HashMap<String, AppEntry> = previous_apps
         .into_iter()
         .map(|app| (normalize_key(&app.source), app))
@@ -791,6 +814,7 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
             &root,
             &previous_metadata,
             &previous_source_metadata,
+            &previous_launch_metadata,
             &previous_by_source,
             &mut seen,
             &mut apps,
@@ -799,6 +823,7 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
     scan_start_apps(
         &previous_metadata,
         &previous_source_metadata,
+        &previous_launch_metadata,
         &previous_by_source,
         &mut seen,
         &mut apps,
@@ -812,6 +837,7 @@ fn scan_directory(
     root: &Path,
     previous_metadata: &HashMap<String, AppMetadata>,
     previous_source_metadata: &HashMap<String, AppMetadata>,
+    previous_launch_metadata: &HashMap<String, AppMetadata>,
     previous_by_source: &HashMap<String, AppEntry>,
     seen: &mut HashMap<String, ()>,
     apps: &mut Vec<AppEntry>,
@@ -866,17 +892,13 @@ fn scan_directory(
                     continue;
                 }
 
-                if let Some(metadata) = previous_metadata
-                    .get(&app_entry.id)
-                    .or_else(|| previous_source_metadata.get(&normalize_key(&app_entry.source)))
-                {
-                    app_entry.launches = metadata.launches;
-                    app_entry.hidden = metadata.hidden;
-                    app_entry.last_error = metadata.last_error.clone();
-                    app_entry.custom_name = metadata.custom_name.clone();
-                    if !metadata.custom_name.trim().is_empty() {
-                        apply_display_name(&mut app_entry, metadata.custom_name.clone());
-                    }
+                if let Some(metadata) = find_previous_metadata(
+                    &app_entry,
+                    previous_metadata,
+                    previous_source_metadata,
+                    previous_launch_metadata,
+                ) {
+                    apply_metadata(&mut app_entry, metadata);
                 }
                 push_scanned_app(app_entry, seen, apps);
             }
@@ -889,6 +911,7 @@ fn scan_directory(
 fn scan_start_apps(
     previous_metadata: &HashMap<String, AppMetadata>,
     previous_source_metadata: &HashMap<String, AppMetadata>,
+    previous_launch_metadata: &HashMap<String, AppMetadata>,
     previous_by_source: &HashMap<String, AppEntry>,
     seen: &mut HashMap<String, ()>,
     apps: &mut Vec<AppEntry>,
@@ -919,17 +942,13 @@ fn scan_start_apps(
             false,
         );
 
-        if let Some(metadata) = previous_metadata
-            .get(&app_entry.id)
-            .or_else(|| previous_source_metadata.get(&normalize_key(&app_entry.source)))
-        {
-            app_entry.launches = metadata.launches;
-            app_entry.hidden = metadata.hidden;
-            app_entry.last_error = metadata.last_error.clone();
-            app_entry.custom_name = metadata.custom_name.clone();
-            if !metadata.custom_name.trim().is_empty() {
-                apply_display_name(&mut app_entry, metadata.custom_name.clone());
-            }
+        if let Some(metadata) = find_previous_metadata(
+            &app_entry,
+            previous_metadata,
+            previous_source_metadata,
+            previous_launch_metadata,
+        ) {
+            apply_metadata(&mut app_entry, metadata);
         }
         push_scanned_app(app_entry, seen, apps);
     }
@@ -996,6 +1015,32 @@ fn metadata_from_app(app: &AppEntry) -> AppMetadata {
         hidden: app.hidden,
         last_error: app.last_error.clone(),
     }
+}
+
+fn find_previous_metadata<'a>(
+    app: &AppEntry,
+    previous_metadata: &'a HashMap<String, AppMetadata>,
+    previous_source_metadata: &'a HashMap<String, AppMetadata>,
+    previous_launch_metadata: &'a HashMap<String, AppMetadata>,
+) -> Option<&'a AppMetadata> {
+    previous_metadata
+        .get(&app.id)
+        .or_else(|| previous_source_metadata.get(&normalize_key(&app.source)))
+        .or_else(|| previous_launch_metadata.get(&launch_metadata_key(app)))
+}
+
+fn apply_metadata(app: &mut AppEntry, metadata: &AppMetadata) {
+    app.launches = metadata.launches;
+    app.hidden = metadata.hidden;
+    app.last_error = metadata.last_error.clone();
+    app.custom_name = metadata.custom_name.clone();
+    if !metadata.custom_name.trim().is_empty() {
+        apply_display_name(app, metadata.custom_name.clone());
+    }
+}
+
+fn launch_metadata_key(app: &AppEntry) -> String {
+    format!("{}\n{}", normalize_key(&app.path), app.launch_args)
 }
 
 fn push_scanned_app(
@@ -1795,6 +1840,35 @@ mod tests {
     }
 
     #[test]
+    fn previous_metadata_falls_back_to_launch_target() {
+        let mut old_app = test_app("App");
+        old_app.id = "old-id".to_string();
+        old_app.source = r"C:\Shortcuts\App.lnk".to_string();
+        old_app.launches = 7;
+
+        let mut new_app = old_app.clone();
+        new_app.id = "new-id".to_string();
+        new_app.source = r"C:\Apps\App\App.exe".to_string();
+        new_app.launches = 0;
+
+        let previous_metadata = HashMap::new();
+        let previous_source_metadata = HashMap::new();
+        let previous_launch_metadata =
+            HashMap::from([(launch_metadata_key(&old_app), metadata_from_app(&old_app))]);
+
+        let metadata = find_previous_metadata(
+            &new_app,
+            &previous_metadata,
+            &previous_source_metadata,
+            &previous_launch_metadata,
+        )
+        .expect("metadata should match by launch target");
+
+        apply_metadata(&mut new_app, metadata);
+        assert_eq!(new_app.launches, 7);
+    }
+
+    #[test]
     fn search_matches_english_fragments_and_initials() {
         let apps = vec![test_app("ActivityWatch"), test_app("Everything")];
 
@@ -2048,6 +2122,10 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&about, &scan, &settings, &lightweight, &quit])?;
     let lightweight_for_event = lightweight.clone();
+    let scan_menu_item = SCAN_MENU_ITEM.get_or_init(|| Mutex::new(None));
+    if let Ok(mut item) = scan_menu_item.lock() {
+        *item = Some(scan.clone());
+    }
 
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)

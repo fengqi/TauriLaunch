@@ -140,6 +140,7 @@ function LauncherWindow() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [iconSize, setIconSize] = useState(defaultSettings.iconSize);
+  const [scanning, setScanning] = useState(false);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [contextMenu, setContextMenu] = useState<AppContextMenuState | null>(
     null,
@@ -225,6 +226,10 @@ function LauncherWindow() {
     });
     const unlistenScanFailed = listen<string>("scan-failed", (event) => {
       setError(event.payload);
+      setScanning(false);
+    });
+    const unlistenScanState = listen<boolean>("scan-state-changed", (event) => {
+      setScanning(Boolean(event.payload));
     });
     const unlistenFocusSearch = listen("focus-search", () => {
       focusSearchInput();
@@ -238,6 +243,7 @@ function LauncherWindow() {
       void unlistenSettings.then((dispose) => dispose());
       void unlistenDismissed.then((dispose) => dispose());
       void unlistenScanFailed.then((dispose) => dispose());
+      void unlistenScanState.then((dispose) => dispose());
       void unlistenFocusSearch.then((dispose) => dispose());
     };
   }, []);
@@ -454,9 +460,11 @@ function LauncherWindow() {
 
   async function scanApps() {
     try {
+      setScanning(true);
       await invoke("scan_apps");
       setError("");
     } catch (reason) {
+      setScanning(false);
       setError(String(reason));
     }
   }
@@ -592,9 +600,19 @@ function LauncherWindow() {
               />
             ) : null}
           </div>
-          <button type="button" className="toolbar-button" onClick={scanApps}>
-            <span aria-hidden="true">↻</span>
-            扫描
+          <button
+            type="button"
+            className="toolbar-button"
+            onClick={scanApps}
+            disabled={scanning}
+          >
+            <span
+              aria-hidden="true"
+              className={scanning ? "scan-spinner" : undefined}
+            >
+              ↻
+            </span>
+            {scanning ? "扫描中" : "扫描"}
           </button>
           <button type="button" className="toolbar-button" onClick={addApp}>
             <span aria-hidden="true">＋</span>

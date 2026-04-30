@@ -190,10 +190,31 @@ button {
   background: #f0f7ff;
 }
 
+.toolbar-button:disabled {
+  cursor: default;
+  color: #667085;
+  background: #f6f8fa;
+  border-color: #e1e6ec;
+}
+
 .toolbar-button span {
   color: #2563eb;
   font-size: 15px;
   line-height: 1;
+}
+
+.toolbar-button:disabled span {
+  color: #667085;
+}
+
+.scan-spinner {
+  animation: scan-spin 0.8s linear infinite;
+}
+
+@keyframes scan-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .app-grid {
