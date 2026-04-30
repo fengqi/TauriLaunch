@@ -66,18 +66,7 @@ fn default_icon_size() -> u32 {
 }
 
 fn default_watched_directories() -> Vec<String> {
-    let user_profile =
-        std::env::var("USERPROFILE").unwrap_or_else(|_| String::from("C:\\Users\\fengqi"));
-    ["App", "Game", "SingleExe"]
-        .iter()
-        .map(|name| {
-            PathBuf::from(&user_profile)
-                .join("Desktop")
-                .join(name)
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect()
+    Vec::new()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

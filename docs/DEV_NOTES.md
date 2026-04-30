@@ -59,11 +59,9 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
   "manualLaunchMode": "window",
   "iconSize": 38,
   "autostartEnabled": false,
-  "watchedDirectories": [
-    "C:\\Users\\fengqi\\Desktop\\App",
-    "C:\\Users\\fengqi\\Desktop\\Game",
-    "C:\\Users\\fengqi\\Desktop\\SingleExe"
-  ]
+  "physicalDeleteEnabled": false,
+  "showHiddenApps": false,
+  "watchedDirectories": []
 }
 ```
 

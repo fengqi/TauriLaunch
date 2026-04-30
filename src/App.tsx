@@ -1,8 +1,14 @@
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from "react";
+import { Component, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type {
+  CSSProperties,
+  FocusEvent,
+  KeyboardEvent,
+  MouseEvent,
+  ReactNode,
+} from "react";
 import "./App.css";
 
 type AppEntry = {
@@ -63,11 +69,7 @@ const defaultSettings: AppSettings = {
   autostartEnabled: false,
   physicalDeleteEnabled: false,
   showHiddenApps: false,
-  watchedDirectories: [
-    "C:\\Users\\fengqi\\Desktop\\App",
-    "C:\\Users\\fengqi\\Desktop\\Game",
-    "C:\\Users\\fengqi\\Desktop\\SingleExe",
-  ],
+  watchedDirectories: [],
 };
 
 const settingsTabs: { id: SettingsTab; label: string }[] = [
@@ -82,14 +84,53 @@ function App() {
   const view = new URLSearchParams(window.location.search).get("view") ?? "main";
 
   if (view === "settings") {
-    return <SettingsWindow />;
+    return (
+      <AppErrorBoundary>
+        <SettingsWindow />
+      </AppErrorBoundary>
+    );
   }
 
   if (view === "about") {
-    return <AboutWindow />;
+    return (
+      <AppErrorBoundary>
+        <AboutWindow />
+      </AppErrorBoundary>
+    );
   }
 
-  return <LauncherWindow />;
+  return (
+    <AppErrorBoundary>
+      <LauncherWindow />
+    </AppErrorBoundary>
+  );
+}
+
+type AppErrorBoundaryProps = {
+  children: ReactNode;
+};
+
+type AppErrorBoundaryState = {
+  error: string;
+};
+
+class AppErrorBoundary extends Component<
+  AppErrorBoundaryProps,
+  AppErrorBoundaryState
+> {
+  state: AppErrorBoundaryState = { error: "" };
+
+  static getDerivedStateFromError(error: unknown): AppErrorBoundaryState {
+    return { error: String(error) };
+  }
+
+  render() {
+    if (this.state.error) {
+      return <main className="app-state error-state">{this.state.error}</main>;
+    }
+
+    return this.props.children;
+  }
 }
 
 function LauncherWindow() {
@@ -813,6 +854,17 @@ function SettingsWindow() {
     }));
   }
 
+  function updateBooleanSetting(
+    name: "autostartEnabled" | "physicalDeleteEnabled" | "showHiddenApps",
+    checked: boolean,
+  ) {
+    setSettings((current) => ({
+      ...defaultSettings,
+      ...current,
+      [name]: checked,
+    }));
+  }
+
   async function chooseDirectory() {
     const selected = await open({
       directory: true,
@@ -1017,10 +1069,10 @@ function SettingsWindow() {
               type="checkbox"
               checked={settings.physicalDeleteEnabled}
               onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  physicalDeleteEnabled: event.currentTarget.checked,
-                }))
+                updateBooleanSetting(
+                  "physicalDeleteEnabled",
+                  event.currentTarget.checked,
+                )
               }
             />
           </label>
@@ -1030,10 +1082,7 @@ function SettingsWindow() {
               type="checkbox"
               checked={settings.showHiddenApps}
               onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  showHiddenApps: event.currentTarget.checked,
-                }))
+                updateBooleanSetting("showHiddenApps", event.currentTarget.checked)
               }
             />
           </label>
@@ -1043,10 +1092,7 @@ function SettingsWindow() {
               type="checkbox"
               checked={settings.autostartEnabled}
               onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  autostartEnabled: event.currentTarget.checked,
-                }))
+                updateBooleanSetting("autostartEnabled", event.currentTarget.checked)
               }
             />
           </label>
