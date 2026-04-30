@@ -133,6 +133,17 @@ class AppErrorBoundary extends Component<
   }
 }
 
+function useDisableNativeContextMenu() {
+  useEffect(() => {
+    const handleContextMenu = (event: globalThis.MouseEvent) => {
+      event.preventDefault();
+    };
+
+    window.addEventListener("contextmenu", handleContextMenu);
+    return () => window.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+}
+
 function LauncherWindow() {
   const [query, setQuery] = useState("");
   const [apps, setApps] = useState<AppEntry[]>([]);
@@ -787,6 +798,7 @@ function LauncherWindow() {
 }
 
 function SettingsWindow() {
+  useDisableNativeContextMenu();
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [activeTab, setActiveTab] = useState<SettingsTab>("directories");
   const [directoryInput, setDirectoryInput] = useState("");
@@ -1163,6 +1175,8 @@ function SettingsWindow() {
 }
 
 function AboutWindow() {
+  useDisableNativeContextMenu();
+
   return (
     <main className="about-shell">
       <div className="about-mark">TL</div>
