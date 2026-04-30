@@ -87,7 +87,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
     "accent": "#2563eb",
     "initials": "AP",
     "searchText": "appname app ap c:\\path\\app.exe",
-    "iconPath": "C:\\Users\\fengqi\\AppData\\Local\\com.fengqi.taurilaunch\\icons\\stable-id-256.png",
+    "iconPath": "C:\\Users\\fengqi\\AppData\\Local\\com.fengqi.taurilaunch\\icons\\stable-id-128.png",
     "customName": "",
     "source": "C:\\Shortcut\\App.lnk",
     "hidden": false,
@@ -103,14 +103,15 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 开机启动通过 `--startup` 或 `--autostart` 参数识别，默认只启动到托盘。
 - 普通双击启动默认显示主窗口，可在设置中改为启动到托盘。
 - 托盘菜单 `退出` 才真正退出整个进程。
-- 托盘 `轻量模式` 只在当前进程内生效，不保存到 JSON。
+- 托盘 `轻量模式` 只在当前进程内生效，不保存到 JSON；轻量模式关闭/失焦时先隐藏窗口，60 秒后仍未重新打开才销毁 WebView。
 - 开机启动设置写入当前用户 `Run` 注册表项，启动参数为 `--startup`。
 - 图标大小可选 `32`、`38`、`48`，设置窗口不提供 `64`。
-- 图标缓存路径为 `%LOCALAPPDATA%\com.fengqi.taurilaunch\icons\{id}-256.png`。
-- 图标提取优先通过 Windows `PrivateExtractIcons` 请求 256、128、64、48、32 档图标；失败时再回退到 `ExtractAssociatedIcon`。
+- 图标缓存路径为 `%LOCALAPPDATA%\com.fengqi.taurilaunch\icons\{id}-128.png`；应用商店 / MSIX 条目使用 `{id}-shell-128.png`，用于区分按 Appx 清单生成的裁边图标。
+- 图标提取优先通过 Windows `PrivateExtractIcons` 请求 128、64、48、32 档图标；失败时再回退到 `ExtractAssociatedIcon`。
 - 当前 `.lnk` 解析使用 PowerShell 调用 Windows WScript Shell COM，后续如果扫描性能不够，再替换为 Rust 侧直接 COM 调用。
 - `.lnk` 解析后必须确认目标文件存在；目标不存在的残留快捷方式不生成条目，也不进入图标提取。
-- 扫描先按 `source` 查旧条目；旧条目目标文件存在、工作目录有效或为空、启动参数可解析、图标缓存路径是当前 `{id}-256.png` 格式且文件存在时，直接复用旧记录。
+- 应用商店 / MSIX 应用不依赖监听目录快捷方式；扫描阶段调用 `Get-StartApps`，把带 `AppID` 的项目保存为 `shell:AppsFolder\...`，再通过 Appx 包清单里的 `Square150x150Logo` / `Square44x44Logo` 生成 128 图标缓存。
+- 扫描先按 `source` 查旧条目；旧条目目标文件存在、工作目录有效或为空、启动参数可解析、图标缓存路径是当前 `{id}-128.png` 格式且文件存在时，直接复用旧记录。旧 `{id}-256.png` 数据会在下次扫描时被视为旧格式并重新生成 128 图标。
 - 图标缓存缺失、图标路径是旧格式、目标不存在、工作目录失效或启动参数不可解析时，不复用旧记录，重新解析 `.lnk` / `.exe` 并重新尝试图标提取。
 - `scan_apps` 只启动后台扫描线程并立即返回，不直接返回应用列表；托盘扫描和启动扫描也走同一后台扫描入口。
 - 后台扫描由进程内 `SCAN_RUNNING` 防重复；已有扫描运行时再次触发扫描会直接忽略。
@@ -120,6 +121,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 中文拼音搜索由 Rust 后端 `search_apps` 命令使用 `ib-pinyin` 执行，前端不要重复计算拼音索引。
 - 真实启动由 Rust 后端 `launch_app` 执行，使用条目中的路径、启动参数和工作目录。
 - `launch_app` 先用 `Command::spawn()` 启动；如果 Windows 返回 raw os error `740`，再用 `ShellExecuteW` + `runas` 重试，让系统弹 UAC。
+- `shell:AppsFolder\...` 条目直接用 `ShellExecuteW` + `open` 启动，不走 `Command::spawn()`。
 - 后端返回应用列表前统一排序：启动次数从大到小，次数相同按名称排序。
 - 前端单击应用条目启动应用，启动成功后清空搜索状态并刷新列表。
 - 主窗口创建或重新显示后，后端发送 `focus-search` 事件，前端聚焦搜索输入框；前端初次挂载时也主动聚焦一次。
@@ -129,6 +131,8 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 前端右键应用条目显示自定义菜单，并屏蔽 WebView 默认右键菜单。
 - 修改名称写入 `customName`，扫描时保留；只重建显示名称、首字母和搜索索引，不修改路径、启动参数和工作目录。
 - 条目隐藏由 Rust 后端 `hide_app` 执行，隐藏状态写入 `apps.json` 并在重新扫描时保留。
+- `settings.json` 的 `physicalDeleteEnabled` 控制删除策略：默认 `false` 表示隐藏；为 `true` 时 `hide_app` 会移除本地记录并删除当前图标缓存。
+- `settings.json` 的 `showHiddenApps` 控制隐藏条目是否返回给前端；启用后后端排序仍保证隐藏条目在可见条目之后。
 - 当前主界面“添加”是保留入口，真实功能在后续阶段接入。
 - 用户要求调整功能、交互、产品规则时，同步更新文档中的最终版本描述。
 - 纯 bug 修复不用更新产品计划。

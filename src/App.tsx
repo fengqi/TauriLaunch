@@ -47,6 +47,8 @@ type AppSettings = {
   manualLaunchMode: LaunchMode;
   iconSize: number;
   autostartEnabled: boolean;
+  physicalDeleteEnabled: boolean;
+  showHiddenApps: boolean;
   watchedDirectories: string[];
 };
 
@@ -59,6 +61,8 @@ const defaultSettings: AppSettings = {
   manualLaunchMode: "window",
   iconSize: 38,
   autostartEnabled: false,
+  physicalDeleteEnabled: false,
+  showHiddenApps: false,
   watchedDirectories: [
     "C:\\Users\\fengqi\\Desktop\\App",
     "C:\\Users\\fengqi\\Desktop\\Game",
@@ -171,6 +175,9 @@ function LauncherWindow() {
     });
     const unlistenSettings = listen<AppSettings>("settings-updated", (event) => {
       setIconSize(event.payload.iconSize || defaultSettings.iconSize);
+      void invoke<AppEntry[]>("get_apps")
+        .then((updatedApps) => applyUpdatedApps(updatedApps))
+        .catch((reason) => setError(String(reason)));
     });
     const unlistenDismissed = listen("main-window-dismissed", () => {
       clearSearch();
@@ -582,7 +589,7 @@ function LauncherWindow() {
           {filteredApps.map((app) => (
             <div
               key={app.id}
-              className="app-tile"
+              className={`app-tile${app.hidden ? " hidden-app" : ""}`}
               role="button"
               tabIndex={0}
               onClick={() => void launchApp(app)}
@@ -738,6 +745,8 @@ function SettingsWindow() {
             ...loaded,
             iconSize: loaded.iconSize || defaultSettings.iconSize,
             autostartEnabled: Boolean(loaded.autostartEnabled),
+            physicalDeleteEnabled: Boolean(loaded.physicalDeleteEnabled),
+            showHiddenApps: Boolean(loaded.showHiddenApps),
             watchedDirectories:
               loaded.watchedDirectories ?? defaultSettings.watchedDirectories,
           });
@@ -1001,6 +1010,32 @@ function SettingsWindow() {
           <label className="checkbox-row">
             <span>自动添加桌面快捷方式</span>
             <input type="checkbox" />
+          </label>
+          <label className="checkbox-row">
+            <span>物理删除应用记录</span>
+            <input
+              type="checkbox"
+              checked={settings.physicalDeleteEnabled}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  physicalDeleteEnabled: event.currentTarget.checked,
+                }))
+              }
+            />
+          </label>
+          <label className="checkbox-row">
+            <span>显示隐藏的应用</span>
+            <input
+              type="checkbox"
+              checked={settings.showHiddenApps}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  showHiddenApps: event.currentTarget.checked,
+                }))
+              }
+            />
           </label>
           <label className="checkbox-row">
             <span>开机启动</span>

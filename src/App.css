@@ -253,6 +253,17 @@ button {
   user-select: none;
 }
 
+.app-tile.hidden-app {
+  background: #f6f8fa;
+  border-color: #e7ebf0;
+  color: #6b7280;
+  opacity: 0.62;
+}
+
+.app-tile.hidden-app .app-icon {
+  filter: grayscale(0.55);
+}
+
 .app-icon {
   width: var(--app-icon-size, 38px);
   height: var(--app-icon-size, 38px);

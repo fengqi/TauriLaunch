@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 #[cfg(target_os = "windows")]
 use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::{
@@ -33,6 +33,8 @@ const ABOUT_LABEL: &str = "about";
 const DEFAULT_RIGHT_OFFSET: i32 = 10;
 const DEFAULT_BOTTOM_OFFSET: i32 = 10;
 const DEFAULT_ICON_SIZE: u32 = 38;
+const ICON_CACHE_SIZE: u32 = 128;
+const LIGHTWEIGHT_DESTROY_DELAY: Duration = Duration::from_secs(60);
 const AUTOSTART_NAME: &str = "TauriLaunch";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -41,6 +43,8 @@ const ERROR_ELEVATION_REQUIRED: i32 = 740;
 static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
 static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 static MAIN_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
+static MAIN_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SETTINGS_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +95,10 @@ struct AppSettings {
     icon_size: u32,
     #[serde(default)]
     autostart_enabled: bool,
+    #[serde(default)]
+    physical_delete_enabled: bool,
+    #[serde(default)]
+    show_hidden_apps: bool,
     #[serde(default = "default_watched_directories")]
     watched_directories: Vec<String>,
 }
@@ -104,6 +112,8 @@ impl Default for AppSettings {
             manual_launch_mode: default_manual_launch_mode(),
             icon_size: default_icon_size(),
             autostart_enabled: is_autostart_enabled(),
+            physical_delete_enabled: false,
+            show_hidden_apps: false,
             watched_directories: default_watched_directories(),
         }
     }
@@ -139,6 +149,16 @@ struct ShortcutInfo {
     target_path: String,
     arguments: String,
     working_directory: String,
+    #[serde(default)]
+    app_user_model_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct StartAppInfo {
+    name: String,
+    #[serde(rename = "AppID")]
+    app_id: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -174,7 +194,7 @@ fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
 
 #[tauri::command]
 fn get_apps() -> Vec<AppEntry> {
-    visible_apps(load_apps().unwrap_or_default())
+    configured_apps(load_apps().unwrap_or_default())
 }
 
 #[tauri::command]
@@ -189,7 +209,7 @@ fn set_main_dialog_open(open: bool) {
 
 #[tauri::command]
 fn search_apps(query: String) -> Vec<AppEntry> {
-    filter_apps(visible_apps(load_apps().unwrap_or_default()), &query)
+    filter_apps(configured_apps(load_apps().unwrap_or_default()), &query)
 }
 
 #[tauri::command]
@@ -340,7 +360,7 @@ fn spawn_scan(app: AppHandle) {
 fn scan_store_and_emit(app: &AppHandle) -> io::Result<Vec<AppEntry>> {
     let apps = scan_configured_apps()?;
     store_apps(&apps)?;
-    let visible = visible_apps(apps);
+    let visible = configured_apps(apps);
     emit_apps_updated_to_visible_main(app, &visible);
     Ok(visible)
 }
@@ -387,19 +407,43 @@ fn filter_apps(apps: Vec<AppEntry>, query: &str) -> Vec<AppEntry> {
         .collect()
 }
 
-fn visible_apps(mut apps: Vec<AppEntry>) -> Vec<AppEntry> {
+fn configured_apps(apps: Vec<AppEntry>) -> Vec<AppEntry> {
+    let settings = load_settings().unwrap_or_default();
+    apps_for_settings(apps, &settings)
+}
+
+fn apps_for_settings(mut apps: Vec<AppEntry>, settings: &AppSettings) -> Vec<AppEntry> {
     sort_apps(&mut apps);
-    apps.into_iter().filter(|app| !app.hidden).collect()
+    if settings.show_hidden_apps {
+        apps
+    } else {
+        apps.into_iter().filter(|app| !app.hidden).collect()
+    }
 }
 
 fn sort_apps(apps: &mut [AppEntry]) {
     apps.sort_by(|left, right| {
-        right
-            .launches
-            .cmp(&left.launches)
+        left.hidden
+            .cmp(&right.hidden)
+            .then_with(|| right.launches.cmp(&left.launches))
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
     });
+}
+
+fn app_accessible(app: &AppEntry, settings: &AppSettings) -> bool {
+    !app.hidden || settings.show_hidden_apps
+}
+
+fn remove_icon_cache(app: &AppEntry) {
+    let icon_path = app.icon_path.trim();
+    if !icon_path.is_empty() {
+        let _ = fs::remove_file(icon_path);
+    }
+
+    if let Ok(path) = expected_icon_cache_path_for(&app.id, &app.path) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn add_app_from_source(source: &Path) -> io::Result<Vec<AppEntry>> {
@@ -430,7 +474,7 @@ fn add_app_from_source(source: &Path) -> io::Result<Vec<AppEntry>> {
         }
         sort_apps(&mut apps);
         store_apps(&apps)?;
-        return Ok(visible_apps(apps));
+        return Ok(configured_apps(apps));
     }
 
     if let Some(existing) = apps
@@ -448,18 +492,22 @@ fn add_app_from_source(source: &Path) -> io::Result<Vec<AppEntry>> {
         }
         sort_apps(&mut apps);
         store_apps(&apps)?;
-        return Ok(visible_apps(apps));
+        return Ok(configured_apps(apps));
     }
 
     apps.push(app_entry);
     sort_apps(&mut apps);
     store_apps(&apps)?;
-    Ok(visible_apps(apps))
+    Ok(configured_apps(apps))
 }
 
 fn launch_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
     let mut apps = load_apps()?;
-    let Some(index) = apps.iter().position(|app| app.id == app_id && !app.hidden) else {
+    let settings = load_settings().unwrap_or_default();
+    let Some(index) = apps
+        .iter()
+        .position(|app| app.id == app_id && app_accessible(app, &settings))
+    else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "应用不存在或已隐藏",
@@ -473,7 +521,7 @@ fn launch_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
             apps[index].last_error.clear();
             sort_apps(&mut apps);
             store_apps(&apps)?;
-            Ok(visible_apps(apps))
+            Ok(configured_apps(apps))
         }
         Err(error) => {
             apps[index].last_error = error.to_string();
@@ -485,6 +533,19 @@ fn launch_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
 
 fn hide_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
     let mut apps = load_apps()?;
+    let settings = load_settings().unwrap_or_default();
+    if settings.physical_delete_enabled {
+        let Some(index) = apps.iter().position(|app| app.id == app_id) else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "app not found"));
+        };
+
+        let app = apps.remove(index);
+        remove_icon_cache(&app);
+        sort_apps(&mut apps);
+        store_apps(&apps)?;
+        return Ok(configured_apps(apps));
+    }
+
     let Some(app) = apps.iter_mut().find(|app| app.id == app_id) else {
         return Err(io::Error::new(io::ErrorKind::NotFound, "应用不存在"));
     };
@@ -492,18 +553,22 @@ fn hide_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
     app.hidden = true;
     sort_apps(&mut apps);
     store_apps(&apps)?;
-    Ok(visible_apps(apps))
+    Ok(configured_apps(apps))
 }
 
 fn pin_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
     let mut apps = load_apps()?;
+    let settings = load_settings().unwrap_or_default();
     let max_launches = apps
         .iter()
-        .filter(|app| !app.hidden)
+        .filter(|app| app_accessible(app, &settings))
         .map(|app| app.launches)
         .max()
         .unwrap_or_default();
-    let Some(app) = apps.iter_mut().find(|app| app.id == app_id && !app.hidden) else {
+    let Some(app) = apps
+        .iter_mut()
+        .find(|app| app.id == app_id && app_accessible(app, &settings))
+    else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "应用不存在或已隐藏",
@@ -513,12 +578,16 @@ fn pin_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
     app.launches = max_launches.saturating_add(2);
     sort_apps(&mut apps);
     store_apps(&apps)?;
-    Ok(visible_apps(apps))
+    Ok(configured_apps(apps))
 }
 
 fn reset_stored_app_position(app_id: &str) -> io::Result<Vec<AppEntry>> {
     let mut apps = load_apps()?;
-    let Some(app) = apps.iter_mut().find(|app| app.id == app_id && !app.hidden) else {
+    let settings = load_settings().unwrap_or_default();
+    let Some(app) = apps
+        .iter_mut()
+        .find(|app| app.id == app_id && app_accessible(app, &settings))
+    else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "应用不存在或已隐藏",
@@ -528,17 +597,21 @@ fn reset_stored_app_position(app_id: &str) -> io::Result<Vec<AppEntry>> {
     app.launches = 0;
     sort_apps(&mut apps);
     store_apps(&apps)?;
-    Ok(visible_apps(apps))
+    Ok(configured_apps(apps))
 }
 
 fn rename_stored_app(app_id: &str, name: &str) -> io::Result<Vec<AppEntry>> {
     let mut apps = load_apps()?;
+    let settings = load_settings().unwrap_or_default();
     let name = name.trim();
     if name.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "名称不能为空"));
     }
 
-    let Some(app) = apps.iter_mut().find(|app| app.id == app_id && !app.hidden) else {
+    let Some(app) = apps
+        .iter_mut()
+        .find(|app| app.id == app_id && app_accessible(app, &settings))
+    else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "应用不存在或已隐藏",
@@ -549,12 +622,16 @@ fn rename_stored_app(app_id: &str, name: &str) -> io::Result<Vec<AppEntry>> {
     apply_display_name(app, name.to_string());
     sort_apps(&mut apps);
     store_apps(&apps)?;
-    Ok(visible_apps(apps))
+    Ok(configured_apps(apps))
 }
 
 fn open_stored_app_directory(app_id: &str) -> io::Result<()> {
     let apps = load_apps()?;
-    let Some(app) = apps.iter().find(|app| app.id == app_id && !app.hidden) else {
+    let settings = load_settings().unwrap_or_default();
+    let Some(app) = apps
+        .iter()
+        .find(|app| app.id == app_id && app_accessible(app, &settings))
+    else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "应用不存在或已隐藏",
@@ -572,6 +649,17 @@ fn open_stored_app_directory(app_id: &str) -> io::Result<()> {
 }
 
 fn start_process(app: &AppEntry) -> io::Result<()> {
+    if is_shell_apps_folder_path(&app.path) {
+        #[cfg(target_os = "windows")]
+        return shell_execute(app, "open", None);
+
+        #[cfg(not(target_os = "windows"))]
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "shell AppsFolder launch is only supported on Windows",
+        ));
+    }
+
     let path = PathBuf::from(&app.path);
     let args = split_launch_args(&app.launch_args)?;
     let mut command = Command::new(&path);
@@ -596,7 +684,7 @@ fn start_process(app: &AppEntry) -> io::Result<()> {
             #[cfg(target_os = "windows")]
             {
                 if error.raw_os_error() == Some(ERROR_ELEVATION_REQUIRED) {
-                    return shell_execute_runas(app, working_dir.as_deref());
+                    return shell_execute(app, "runas", working_dir.as_deref());
                 }
             }
 
@@ -606,8 +694,8 @@ fn start_process(app: &AppEntry) -> io::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn shell_execute_runas(app: &AppEntry, working_dir: Option<&Path>) -> io::Result<()> {
-    let operation = wide_null("runas");
+fn shell_execute(app: &AppEntry, operation: &str, working_dir: Option<&Path>) -> io::Result<()> {
+    let operation = wide_null(operation);
     let file = wide_null(app.path.trim());
     let parameters = wide_null(app.launch_args.trim());
     let directory_text = working_dir
@@ -719,6 +807,13 @@ fn scan_configured_apps() -> io::Result<Vec<AppEntry>> {
             &mut apps,
         )?;
     }
+    scan_start_apps(
+        &previous_metadata,
+        &previous_source_metadata,
+        &previous_by_source,
+        &mut seen,
+        &mut apps,
+    );
 
     sort_apps(&mut apps);
     Ok(apps)
@@ -802,6 +897,91 @@ fn scan_directory(
     Ok(())
 }
 
+fn scan_start_apps(
+    previous_metadata: &HashMap<String, AppMetadata>,
+    previous_source_metadata: &HashMap<String, AppMetadata>,
+    previous_by_source: &HashMap<String, AppEntry>,
+    seen: &mut HashMap<String, ()>,
+    apps: &mut Vec<AppEntry>,
+) {
+    for start_app in read_start_apps() {
+        let app_user_model_id = start_app.app_id.trim();
+        let name = start_app.name.trim();
+        if app_user_model_id.is_empty() || name.is_empty() {
+            continue;
+        }
+
+        let source = shell_apps_folder_path(app_user_model_id);
+        if let Some(previous_app) = previous_by_source
+            .get(&normalize_key(&source))
+            .filter(|app| can_reuse_scanned_app(app))
+        {
+            if push_scanned_app(previous_app.clone(), seen, apps) {
+                continue;
+            }
+        }
+
+        let mut app_entry = build_app_entry(
+            name.to_string(),
+            source.clone(),
+            String::new(),
+            String::new(),
+            source,
+            false,
+        );
+
+        if let Some(metadata) = previous_metadata
+            .get(&app_entry.id)
+            .or_else(|| previous_source_metadata.get(&normalize_key(&app_entry.source)))
+        {
+            app_entry.launches = metadata.launches;
+            app_entry.hidden = metadata.hidden;
+            app_entry.last_error = metadata.last_error.clone();
+            app_entry.custom_name = metadata.custom_name.clone();
+            if !metadata.custom_name.trim().is_empty() {
+                apply_display_name(&mut app_entry, metadata.custom_name.clone());
+            }
+        }
+        push_scanned_app(app_entry, seen, apps);
+    }
+}
+
+fn read_start_apps() -> Vec<StartAppInfo> {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8
+Get-StartApps |
+  Where-Object { $_.AppID -like '*!*' } |
+  Select-Object Name, AppID |
+  ConvertTo-Json -Compress
+"#;
+
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let Ok(output) = command.output() else {
+        return Vec::new();
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    parse_start_apps_json(&output.stdout)
+}
+
+fn parse_start_apps_json(value: &[u8]) -> Vec<StartAppInfo> {
+    if value.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Vec::new();
+    }
+
+    serde_json::from_slice::<Vec<StartAppInfo>>(value)
+        .or_else(|_| serde_json::from_slice::<StartAppInfo>(value).map(|app| vec![app]))
+        .unwrap_or_default()
+}
+
 fn app_entry_from_source(path: &Path) -> io::Result<Option<AppEntry>> {
     if !path.is_file() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "文件不存在"));
@@ -862,6 +1042,10 @@ fn can_reuse_scanned_app(app: &AppEntry) -> bool {
 }
 
 fn app_launch_target_exists(app: &AppEntry) -> bool {
+    if is_shell_apps_folder_path(&app.path) {
+        return true;
+    }
+
     let path = Path::new(app.path.trim());
     if app.path.trim().is_empty() || !path.is_file() {
         return false;
@@ -875,6 +1059,13 @@ fn app_launch_target_exists(app: &AppEntry) -> bool {
     Path::new(working_dir).is_dir()
 }
 
+fn is_shell_apps_folder_path(value: &str) -> bool {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("shell:appsfolder\\")
+}
+
 fn app_icon_cache_current(app: &AppEntry) -> io::Result<bool> {
     let icon_path = app.icon_path.trim();
     if icon_path.is_empty() {
@@ -882,7 +1073,7 @@ fn app_icon_cache_current(app: &AppEntry) -> io::Result<bool> {
     }
 
     let icon_path = Path::new(icon_path);
-    let expected_icon_path = expected_icon_cache_path(&app.id)?;
+    let expected_icon_path = expected_icon_cache_path_for(&app.id, &app.path)?;
     Ok(normalize_key(icon_path.to_string_lossy().as_ref())
         == normalize_key(expected_icon_path.to_string_lossy().as_ref())
         && icon_path.is_file())
@@ -903,20 +1094,48 @@ fn app_entry_from_exe(path: &Path, refresh_icon: bool) -> AppEntry {
 
 fn app_entry_from_shortcut(path: &Path, refresh_icon: bool) -> Option<AppEntry> {
     let shortcut = read_shortcut(path)?;
-    let target_path = shortcut.target_path.trim().to_string();
-    if target_path.is_empty() || !Path::new(&target_path).is_file() {
+    let mut target_path = shortcut.target_path.trim().to_string();
+    let app_user_model_id = shortcut.app_user_model_id.trim();
+    if !target_path.is_empty()
+        && !Path::new(&target_path).is_file()
+        && !app_user_model_id.is_empty()
+    {
+        target_path = shell_apps_folder_path(app_user_model_id);
+    }
+
+    if target_path.is_empty() && !app_user_model_id.is_empty() {
+        target_path = shell_apps_folder_path(app_user_model_id);
+    }
+
+    if target_path.is_empty()
+        || (!is_shell_apps_folder_path(&target_path) && !Path::new(&target_path).is_file())
+    {
         return None;
     }
 
     let name = file_stem(path);
+    let is_shell_app = is_shell_apps_folder_path(&target_path);
+    let source = if is_shell_app {
+        target_path.clone()
+    } else {
+        path.to_string_lossy().into_owned()
+    };
     Some(build_app_entry(
         name,
         target_path,
         shortcut.arguments.trim().to_string(),
-        shortcut.working_directory.trim().to_string(),
-        path.to_string_lossy().into_owned(),
+        if is_shell_app {
+            String::new()
+        } else {
+            shortcut.working_directory.trim().to_string()
+        },
+        source,
         refresh_icon,
     ))
+}
+
+fn shell_apps_folder_path(app_user_model_id: &str) -> String {
+    format!("shell:AppsFolder\\{}", app_user_model_id.trim())
 }
 
 fn read_shortcut(path: &Path) -> Option<ShortcutInfo> {
@@ -931,6 +1150,15 @@ $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
   TargetPath = $shortcut.TargetPath
   Arguments = $shortcut.Arguments
   WorkingDirectory = $shortcut.WorkingDirectory
+  AppUserModelID = $shortcutPath | ForEach-Object {{
+    $folderPath = Split-Path -LiteralPath $_
+    $fileName = Split-Path -Leaf $_
+    $folder = (New-Object -ComObject Shell.Application).Namespace($folderPath)
+    if ($null -eq $folder) {{ return '' }}
+    $item = $folder.ParseName($fileName)
+    if ($null -eq $item) {{ return '' }}
+    $item.ExtendedProperty('System.AppUserModel.ID')
+  }}
 }} | ConvertTo-Json -Compress
 "#
     );
@@ -1000,11 +1228,19 @@ fn apply_display_name(app: &mut AppEntry, name: String) {
 }
 
 fn expected_icon_cache_path(id: &str) -> io::Result<PathBuf> {
-    Ok(icons_dir()?.join(format!("{id}-256.png")))
+    Ok(icons_dir()?.join(format!("{id}-{ICON_CACHE_SIZE}.png")))
+}
+
+fn expected_icon_cache_path_for(id: &str, path: &str) -> io::Result<PathBuf> {
+    if is_shell_apps_folder_path(path) {
+        return Ok(icons_dir()?.join(format!("{id}-shell-{ICON_CACHE_SIZE}.png")));
+    }
+
+    expected_icon_cache_path(id)
 }
 
 fn ensure_icon_cache(id: &str, source: &str, path: &str, refresh: bool) -> io::Result<String> {
-    let icon_path = expected_icon_cache_path(id)?;
+    let icon_path = expected_icon_cache_path_for(id, path)?;
     if let Some(directory) = icon_path.parent() {
         fs::create_dir_all(directory)?;
     }
@@ -1022,6 +1258,10 @@ fn ensure_icon_cache(id: &str, source: &str, path: &str, refresh: bool) -> io::R
 }
 
 fn extract_icon_to_png(source: &str, path: &str, output: &Path) -> io::Result<()> {
+    if is_shell_apps_folder_path(path) {
+        return extract_shell_app_icon_to_png(path, output);
+    }
+
     let source = powershell_single_quoted_text(source);
     let path = powershell_single_quoted_text(path);
     let output = powershell_single_quoted(output);
@@ -1043,7 +1283,7 @@ public static class IconNative {{
 "@
 $outputPath = {output}
 $candidates = @({path}, {source})
-$sizes = @(256, 128, 64, 48, 32)
+$sizes = @({ICON_CACHE_SIZE}, 64, 48, 32)
 foreach ($candidate in $candidates) {{
   if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {{
     continue
@@ -1083,6 +1323,174 @@ foreach ($candidate in $candidates) {{
     }}
   }} catch {{}}
 }}
+exit 1
+"#
+    );
+
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    ))
+}
+
+fn extract_shell_app_icon_to_png(path: &str, output: &Path) -> io::Result<()> {
+    let app_id = path
+        .trim()
+        .strip_prefix("shell:AppsFolder\\")
+        .or_else(|| path.trim().strip_prefix("shell:appsfolder\\"))
+        .unwrap_or_default();
+    if app_id.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing app user model id",
+        ));
+    }
+
+    let app_id = powershell_single_quoted_text(app_id);
+    let output = powershell_single_quoted(output);
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$appUserModelId = {app_id}
+$outputPath = {output}
+$parts = $appUserModelId.Split('!', 2)
+if ($parts.Length -ne 2 -or [string]::IsNullOrWhiteSpace($parts[0]) -or [string]::IsNullOrWhiteSpace($parts[1])) {{
+  exit 1
+}}
+
+$packageFamilyName = $parts[0]
+$applicationId = $parts[1]
+$package = Get-AppxPackage | Where-Object {{ $_.PackageFamilyName -eq $packageFamilyName }} | Select-Object -First 1
+if ($null -eq $package -or [string]::IsNullOrWhiteSpace($package.InstallLocation)) {{
+  exit 1
+}}
+
+$manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
+if (-not (Test-Path -LiteralPath $manifestPath)) {{
+  exit 1
+}}
+
+[xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
+$application = $manifest.SelectNodes("//*[local-name()='Application']") |
+  Where-Object {{ $_.GetAttribute('Id') -eq $applicationId }} |
+  Select-Object -First 1
+if ($null -eq $application) {{
+  exit 1
+}}
+
+$visual = $application.SelectSingleNode("*[local-name()='VisualElements']")
+$logoValues = New-Object System.Collections.Generic.List[string]
+if ($null -ne $visual) {{
+  foreach ($name in @('Square150x150Logo', 'Square44x44Logo')) {{
+    $value = $visual.GetAttribute($name)
+    if (-not [string]::IsNullOrWhiteSpace($value)) {{
+      $logoValues.Add($value)
+    }}
+  }}
+}}
+
+$packageLogo = $manifest.SelectSingleNode("//*[local-name()='Properties']/*[local-name()='Logo']")
+if ($null -ne $packageLogo -and -not [string]::IsNullOrWhiteSpace($packageLogo.InnerText)) {{
+  $logoValues.Add($packageLogo.InnerText)
+}}
+
+function Add-LogoCandidate {{
+  param([System.Collections.Generic.List[string]]$Candidates, [string]$BasePath)
+  if ([string]::IsNullOrWhiteSpace($BasePath)) {{
+    return
+  }}
+
+  $fullPath = Join-Path $package.InstallLocation $BasePath
+  if (Test-Path -LiteralPath $fullPath) {{
+    $Candidates.Add($fullPath)
+  }}
+
+  $directory = Split-Path -Parent $fullPath
+  $leaf = Split-Path -Leaf $fullPath
+  $stem = [IO.Path]::GetFileNameWithoutExtension($leaf)
+  if ((Test-Path -LiteralPath $directory) -and -not [string]::IsNullOrWhiteSpace($stem)) {{
+    Get-ChildItem -LiteralPath $directory -File -Filter "$stem*.png" -ErrorAction SilentlyContinue |
+      Sort-Object Length -Descending |
+      ForEach-Object {{ $Candidates.Add($_.FullName) }}
+  }}
+}}
+
+$candidates = New-Object System.Collections.Generic.List[string]
+foreach ($logoValue in $logoValues) {{
+  Add-LogoCandidate $candidates $logoValue
+}}
+
+foreach ($candidateInfo in $candidates |
+  Select-Object -Unique |
+  ForEach-Object {{ Get-Item -LiteralPath $_ -ErrorAction SilentlyContinue }} |
+  Sort-Object Length -Descending) {{
+  try {{
+    $candidate = $candidateInfo.FullName
+    if (-not (Test-Path -LiteralPath $candidate)) {{
+      continue
+    }}
+
+    $sourceBitmap = [System.Drawing.Bitmap]::FromFile($candidate)
+    try {{
+      $bitmap = New-Object System.Drawing.Bitmap {ICON_CACHE_SIZE}, {ICON_CACHE_SIZE}
+      $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+      try {{
+        $graphics.Clear([System.Drawing.Color]::Transparent)
+        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $left = $sourceBitmap.Width
+        $top = $sourceBitmap.Height
+        $right = -1
+        $bottom = -1
+        for ($y = 0; $y -lt $sourceBitmap.Height; $y++) {{
+          for ($x = 0; $x -lt $sourceBitmap.Width; $x++) {{
+            if ($sourceBitmap.GetPixel($x, $y).A -gt 8) {{
+              if ($x -lt $left) {{ $left = $x }}
+              if ($x -gt $right) {{ $right = $x }}
+              if ($y -lt $top) {{ $top = $y }}
+              if ($y -gt $bottom) {{ $bottom = $y }}
+            }}
+          }}
+        }}
+
+        if ($right -lt $left -or $bottom -lt $top) {{
+          continue
+        }}
+
+        $cropWidth = $right - $left + 1
+        $cropHeight = $bottom - $top + 1
+        $scale = [Math]::Min({ICON_CACHE_SIZE} / $cropWidth, {ICON_CACHE_SIZE} / $cropHeight)
+        $drawWidth = [int][Math]::Max(1, [Math]::Round($cropWidth * $scale))
+        $drawHeight = [int][Math]::Max(1, [Math]::Round($cropHeight * $scale))
+        $x = [int](({ICON_CACHE_SIZE} - $drawWidth) / 2)
+        $y = [int](({ICON_CACHE_SIZE} - $drawHeight) / 2)
+        $destination = New-Object System.Drawing.Rectangle $x, $y, $drawWidth, $drawHeight
+        $source = New-Object System.Drawing.Rectangle $left, $top, $cropWidth, $cropHeight
+        $graphics.DrawImage($sourceBitmap, $destination, $source, [System.Drawing.GraphicsUnit]::Pixel)
+        $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        exit 0
+      }} finally {{
+        $graphics.Dispose()
+        $bitmap.Dispose()
+      }}
+    }} finally {{
+      $sourceBitmap.Dispose()
+    }}
+  }} catch {{}}
+}}
+
 exit 1
 "#
     );
@@ -1385,6 +1793,19 @@ mod tests {
     }
 
     #[test]
+    fn sort_apps_keeps_hidden_apps_last() {
+        let mut hidden = test_app("Hidden");
+        hidden.hidden = true;
+        hidden.launches = 100;
+        let visible = test_app("Visible");
+
+        assert_eq!(
+            sorted_names(vec![hidden, visible]),
+            vec!["Visible", "Hidden"]
+        );
+    }
+
+    #[test]
     fn search_matches_english_fragments_and_initials() {
         let apps = vec![test_app("ActivityWatch"), test_app("Everything")];
 
@@ -1409,6 +1830,20 @@ fn lightweight_mode_enabled() -> bool {
     LIGHTWEIGHT_MODE.load(Ordering::Relaxed)
 }
 
+fn destroy_generation(label: &str) -> Option<&'static AtomicU64> {
+    match label {
+        MAIN_LABEL => Some(&MAIN_DESTROY_GENERATION),
+        SETTINGS_LABEL => Some(&SETTINGS_DESTROY_GENERATION),
+        _ => None,
+    }
+}
+
+fn cancel_delayed_destroy(label: &str) {
+    if let Some(generation) = destroy_generation(label) {
+        generation.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 fn dismiss_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         dismiss_webview_window(&window);
@@ -1420,22 +1855,48 @@ fn dismiss_webview_window(window: &WebviewWindow) {
         let _ = window.emit("main-window-dismissed", ());
     }
 
+    let _ = window.hide();
     if lightweight_mode_enabled() {
-        let _ = window.destroy();
-    } else {
-        let _ = window.hide();
+        schedule_delayed_destroy(window);
     }
 }
 
-fn destroy_retained_windows(app: &AppHandle) {
+fn schedule_delayed_destroy(window: &WebviewWindow) {
+    let label = window.label().to_string();
+    let Some(generation) = destroy_generation(&label) else {
+        return;
+    };
+    let app = window.app_handle().clone();
+    let expected_generation = generation.fetch_add(1, Ordering::Relaxed) + 1;
+
+    thread::spawn(move || {
+        thread::sleep(LIGHTWEIGHT_DESTROY_DELAY);
+        let Some(generation) = destroy_generation(&label) else {
+            return;
+        };
+
+        if generation.load(Ordering::Relaxed) != expected_generation {
+            return;
+        }
+
+        if let Some(window) = app.get_webview_window(&label) {
+            if !window.is_visible().unwrap_or(false) {
+                let _ = window.destroy();
+            }
+        }
+    });
+}
+
+fn schedule_retained_windows_destroy(app: &AppHandle) {
     for label in [MAIN_LABEL, SETTINGS_LABEL] {
         if let Some(window) = app.get_webview_window(label) {
-            let _ = window.destroy();
+            schedule_delayed_destroy(&window);
         }
     }
 }
 
 fn show_main_window(app: &AppHandle) {
+    cancel_delayed_destroy(MAIN_LABEL);
     if let Some(window) = app.get_webview_window(MAIN_LABEL) {
         position_main_window(&window);
         let _ = window.set_skip_taskbar(true);
@@ -1515,6 +1976,7 @@ fn show_about_window(app: &AppHandle) {
 }
 
 fn show_aux_window(app: &AppHandle, label: &str, title: &str, url: &str, width: f64, height: f64) {
+    cancel_delayed_destroy(label);
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.center();
         let _ = window.set_skip_taskbar(true);
@@ -1610,7 +2072,7 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
                 let checked = lightweight_for_event.is_checked().unwrap_or(false);
                 LIGHTWEIGHT_MODE.store(checked, Ordering::Relaxed);
                 if checked {
-                    destroy_retained_windows(app);
+                    schedule_retained_windows_destroy(app);
                 }
             }
             "quit" => app.exit(0),
