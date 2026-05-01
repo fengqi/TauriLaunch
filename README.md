@@ -16,5 +16,3 @@ npm install
 npm run tauri dev
 npm run tauri build
 ```
-
-当前 M1 已完成基础窗口、设置界面、托盘菜单和主窗口销毁/重建骨架。扫描、图标缓存和启动统计在后续阶段实现。
