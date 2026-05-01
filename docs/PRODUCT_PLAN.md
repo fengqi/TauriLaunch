@@ -88,8 +88,8 @@ TauriLaunch 是一个面向 Windows 的软件启动器。它常驻系统托盘�
 
 ### 后端能力
 
-- 读取和写入 `%LOCALAPPDATA%\com.fengqi.taurilaunch\settings.json`。
-- 读取和写入 `%LOCALAPPDATA%\com.fengqi.taurilaunch\apps.json`。
+- 读取和写入 `%LOCALAPPDATA%\TauriLaunch\settings.json`。
+- 读取和写入 `%LOCALAPPDATA%\TauriLaunch\apps.json`。
 - 启动时扫描配置里的监听目录。
 - 托盘菜单 `扫描` 和主界面 `扫描` 会启动后台扫描任务并立即返回，不阻塞当前主窗口滚动和启动操作。
 - 扫描完成后写入最新应用列表；主窗口可见时刷新当前列表，隐藏或销毁时不主动刷新，下一次打开时读取最新本地数据。

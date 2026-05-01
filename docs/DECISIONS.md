@@ -7,8 +7,8 @@
 - 包管理器：npm。
 - 项目结构：保留官方 `create-tauri-app` 默认结构。
 - 数据持久化：本地 JSON，不引入数据库。
-- 配置文件：`%LOCALAPPDATA%\com.fengqi.taurilaunch\settings.json`。
-- 应用列表文件：`%LOCALAPPDATA%\com.fengqi.taurilaunch\apps.json`。
+- 配置文件：`%LOCALAPPDATA%\TauriLaunch\settings.json`。
+- 应用列表文件：`%LOCALAPPDATA%\TauriLaunch\apps.json`。
 - 数据来源：目录扫描 + 手动添加。
 - 目录配置：监听目录保存到 `settings.json` 的 `watchedDirectories`。
 - 扫描时机：启动时扫描一次，托盘菜单 `扫描` 和主界面 `扫描` 可手动刷新。

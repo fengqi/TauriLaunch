@@ -274,7 +274,7 @@ fn app_data_dir() -> io::Result<PathBuf> {
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is not set"))?;
 
-    Ok(PathBuf::from(local_app_data).join("com.fengqi.taurilaunch"))
+    Ok(PathBuf::from(local_app_data).join("TauriLaunch"))
 }
 
 fn settings_path() -> io::Result<PathBuf> {

@@ -1,8 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TauriLaunch",
+  "mainBinaryName": "TauriLaunch",
   "version": "0.1.0",
-  "identifier": "com.fengqi.taurilaunch",
+  "identifier": "TauriLaunch",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

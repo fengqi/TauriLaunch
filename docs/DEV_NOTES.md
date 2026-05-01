@@ -46,7 +46,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 配置文件：
 
 ```text
-%LOCALAPPDATA%\com.fengqi.taurilaunch\settings.json
+%LOCALAPPDATA%\TauriLaunch\settings.json
 ```
 
 当前字段：
@@ -68,7 +68,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 应用列表：
 
 ```text
-%LOCALAPPDATA%\com.fengqi.taurilaunch\apps.json
+%LOCALAPPDATA%\TauriLaunch\apps.json
 ```
 
 当前字段：
@@ -85,7 +85,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
     "accent": "#2563eb",
     "initials": "AP",
     "searchText": "appname app ap c:\\path\\app.exe",
-    "iconPath": "C:\\Users\\fengqi\\AppData\\Local\\com.fengqi.taurilaunch\\icons\\stable-id-128.png",
+    "iconPath": "C:\\Users\\fengqi\\AppData\\Local\\TauriLaunch\\icons\\stable-id-128.png",
     "customName": "",
     "source": "C:\\Shortcut\\App.lnk",
     "hidden": false,
@@ -104,7 +104,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 托盘 `轻量模式` 只在当前进程内生效，不保存到 JSON；轻量模式关闭/失焦时先隐藏窗口，60 秒后仍未重新打开才销毁 WebView。
 - 开机启动设置写入当前用户 `Run` 注册表项，启动参数为 `--startup`。
 - 图标大小可选 `32`、`38`、`48`，设置窗口不提供 `64`。
-- 图标缓存路径为 `%LOCALAPPDATA%\com.fengqi.taurilaunch\icons\{id}-128.png`；应用商店 / MSIX 条目使用 `{id}-shell-128.png`，用于区分按 Appx 清单生成的裁边图标。
+- 图标缓存路径为 `%LOCALAPPDATA%\TauriLaunch\icons\{id}-128.png`；应用商店 / MSIX 条目使用 `{id}-shell-128.png`，用于区分按 Appx 清单生成的裁边图标。
 - 图标提取优先通过 Windows `PrivateExtractIcons` 请求 128、64、48、32 档图标；失败时再回退到 `ExtractAssociatedIcon`。
 - 当前 `.lnk` 解析使用 PowerShell 调用 Windows WScript Shell COM，后续如果扫描性能不够，再替换为 Rust 侧直接 COM 调用。
 - `.lnk` 解析后必须确认目标文件存在；目标不存在的残留快捷方式不生成条目，也不进入图标提取。
