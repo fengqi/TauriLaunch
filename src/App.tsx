@@ -52,6 +52,8 @@ type AppSettings = {
   startupLaunchMode: LaunchMode;
   manualLaunchMode: LaunchMode;
   liveSearchEnabled: boolean;
+  searchDelayMs: number;
+  enterLaunchEnabled: boolean;
   autoAddDesktopShortcut: boolean;
   iconSize: number;
   autostartEnabled: boolean;
@@ -68,6 +70,8 @@ const defaultSettings: AppSettings = {
   startupLaunchMode: "tray",
   manualLaunchMode: "window",
   liveSearchEnabled: true,
+  searchDelayMs: 120,
+  enterLaunchEnabled: true,
   autoAddDesktopShortcut: false,
   iconSize: 38,
   autostartEnabled: false,
@@ -158,6 +162,10 @@ function LauncherWindow() {
   const [liveSearchEnabled, setLiveSearchEnabled] = useState(
     defaultSettings.liveSearchEnabled,
   );
+  const [searchDelayMs, setSearchDelayMs] = useState(defaultSettings.searchDelayMs);
+  const [enterLaunchEnabled, setEnterLaunchEnabled] = useState(
+    defaultSettings.enterLaunchEnabled,
+  );
   const [scanning, setScanning] = useState(false);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [contextMenu, setContextMenu] = useState<AppContextMenuState | null>(
@@ -238,6 +246,12 @@ function LauncherWindow() {
       setLiveSearchEnabled(
         event.payload.liveSearchEnabled ?? defaultSettings.liveSearchEnabled,
       );
+      setSearchDelayMs(
+        event.payload.searchDelayMs ?? defaultSettings.searchDelayMs,
+      );
+      setEnterLaunchEnabled(
+        event.payload.enterLaunchEnabled ?? defaultSettings.enterLaunchEnabled,
+      );
       void invoke<AppEntry[]>("get_apps")
         .then((updatedApps) => applyUpdatedApps(updatedApps))
         .catch((reason) => setError(String(reason)));
@@ -279,6 +293,10 @@ function LauncherWindow() {
           setLiveSearchEnabled(
             settings.liveSearchEnabled ?? defaultSettings.liveSearchEnabled,
           );
+          setSearchDelayMs(settings.searchDelayMs ?? defaultSettings.searchDelayMs);
+          setEnterLaunchEnabled(
+            settings.enterLaunchEnabled ?? defaultSettings.enterLaunchEnabled,
+          );
         }
       })
       .catch(() => undefined);
@@ -319,13 +337,13 @@ function LauncherWindow() {
             setError(String(reason));
           }
         });
-    }, 120);
+    }, searchDelayMs);
 
     return () => {
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [apps, query, liveSearchEnabled]);
+  }, [apps, query, liveSearchEnabled, searchDelayMs]);
 
   useLayoutEffect(() => {
     if (!tooltip || !tooltipRef.current) {
@@ -541,7 +559,7 @@ function LauncherWindow() {
     if (!liveSearchEnabled) {
       return;
     }
-    if (event.key === "Enter" && filteredApps.length > 0) {
+    if (enterLaunchEnabled && event.key === "Enter" && filteredApps.length > 0) {
       event.preventDefault();
       void launchApp(filteredApps[0]);
     }
@@ -841,6 +859,9 @@ function SettingsWindow() {
             ...loaded,
             iconSize: loaded.iconSize || defaultSettings.iconSize,
             liveSearchEnabled: Boolean(loaded.liveSearchEnabled),
+            searchDelayMs: loaded.searchDelayMs ?? defaultSettings.searchDelayMs,
+            enterLaunchEnabled:
+              loaded.enterLaunchEnabled ?? defaultSettings.enterLaunchEnabled,
             autoAddDesktopShortcut: Boolean(loaded.autoAddDesktopShortcut),
             autostartEnabled: Boolean(loaded.autostartEnabled),
             physicalDeleteEnabled: Boolean(loaded.physicalDeleteEnabled),
@@ -876,7 +897,7 @@ function SettingsWindow() {
   }
 
   function updateNumberSetting(
-    name: "windowRightOffset" | "windowBottomOffset",
+    name: "windowRightOffset" | "windowBottomOffset" | "searchDelayMs",
     value: string,
   ) {
     setSettings((current) => ({
@@ -917,6 +938,7 @@ function SettingsWindow() {
       | "physicalDeleteEnabled"
       | "showHiddenApps"
       | "liveSearchEnabled"
+      | "enterLaunchEnabled"
       | "autoAddDesktopShortcut",
     checked: boolean,
   ) {
@@ -1089,11 +1111,27 @@ function SettingsWindow() {
           </label>
           <label>
             <span>搜索执行延迟(毫秒)</span>
-            <input type="number" defaultValue={1000} />
+            <input
+              type="number"
+              min={0}
+              value={settings.searchDelayMs}
+              onChange={(event) =>
+                updateNumberSetting("searchDelayMs", event.currentTarget.value)
+              }
+            />
           </label>
           <label className="checkbox-row">
             <span>搜索后回车打开首个</span>
-            <input type="checkbox" defaultChecked />
+            <input
+              type="checkbox"
+              checked={settings.enterLaunchEnabled}
+              onChange={(event) =>
+                updateBooleanSetting(
+                  "enterLaunchEnabled",
+                  event.currentTarget.checked,
+                )
+              }
+            />
           </label>
         </div>
       );

@@ -70,6 +70,15 @@ fn default_live_search_enabled() -> bool {
     true
 }
 
+fn default_search_delay_ms() -> u64 {
+    // 与前端既有实时搜索节流保持一致；设置项允许用户后续调整。
+    120
+}
+
+fn default_enter_launch_enabled() -> bool {
+    true
+}
+
 fn default_watched_directories() -> Vec<String> {
     Vec::new()
 }
@@ -89,6 +98,10 @@ struct AppSettings {
     icon_size: u32,
     #[serde(default = "default_live_search_enabled")]
     live_search_enabled: bool,
+    #[serde(default = "default_search_delay_ms")]
+    search_delay_ms: u64,
+    #[serde(default = "default_enter_launch_enabled")]
+    enter_launch_enabled: bool,
     #[serde(default)]
     auto_add_desktop_shortcut: bool,
     #[serde(default)]
@@ -110,6 +123,8 @@ impl Default for AppSettings {
             manual_launch_mode: default_manual_launch_mode(),
             icon_size: default_icon_size(),
             live_search_enabled: default_live_search_enabled(),
+            search_delay_ms: default_search_delay_ms(),
+            enter_launch_enabled: default_enter_launch_enabled(),
             auto_add_desktop_shortcut: false,
             autostart_enabled: is_autostart_enabled(),
             physical_delete_enabled: false,
@@ -422,7 +437,9 @@ fn filter_apps(apps: Vec<AppEntry>, query: &str) -> Vec<AppEntry> {
 
     apps.into_iter()
         .filter(|app| {
-            app.search_text.to_lowercase().contains(&query) || matcher.is_match(app.name.as_str())
+            app.search_text.contains(&query)
+                || app.search_text.to_lowercase().contains(&query)
+                || matcher.is_match(app.name.as_str())
         })
         .collect()
 }
@@ -920,10 +937,18 @@ fn scan_directory(
     let mut pending = vec![root.to_path_buf()];
 
     while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(directory)? {
-            let entry = entry?;
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
             let path = entry.path();
-            let file_type = entry.file_type()?;
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
 
             if file_type.is_dir() {
                 pending.push(path);
