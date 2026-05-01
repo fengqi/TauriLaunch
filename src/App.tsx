@@ -51,6 +51,8 @@ type AppSettings = {
   windowBottomOffset: number;
   startupLaunchMode: LaunchMode;
   manualLaunchMode: LaunchMode;
+  liveSearchEnabled: boolean;
+  autoAddDesktopShortcut: boolean;
   iconSize: number;
   autostartEnabled: boolean;
   physicalDeleteEnabled: boolean;
@@ -65,6 +67,8 @@ const defaultSettings: AppSettings = {
   windowBottomOffset: 10,
   startupLaunchMode: "tray",
   manualLaunchMode: "window",
+  liveSearchEnabled: true,
+  autoAddDesktopShortcut: false,
   iconSize: 38,
   autostartEnabled: false,
   physicalDeleteEnabled: false,
@@ -151,6 +155,9 @@ function LauncherWindow() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [iconSize, setIconSize] = useState(defaultSettings.iconSize);
+  const [liveSearchEnabled, setLiveSearchEnabled] = useState(
+    defaultSettings.liveSearchEnabled,
+  );
   const [scanning, setScanning] = useState(false);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [contextMenu, setContextMenu] = useState<AppContextMenuState | null>(
@@ -228,6 +235,9 @@ function LauncherWindow() {
     });
     const unlistenSettings = listen<AppSettings>("settings-updated", (event) => {
       setIconSize(event.payload.iconSize || defaultSettings.iconSize);
+      setLiveSearchEnabled(
+        event.payload.liveSearchEnabled ?? defaultSettings.liveSearchEnabled,
+      );
       void invoke<AppEntry[]>("get_apps")
         .then((updatedApps) => applyUpdatedApps(updatedApps))
         .catch((reason) => setError(String(reason)));
@@ -266,6 +276,9 @@ function LauncherWindow() {
       .then((settings) => {
         if (!canceled) {
           setIconSize(settings.iconSize || defaultSettings.iconSize);
+          setLiveSearchEnabled(
+            settings.liveSearchEnabled ?? defaultSettings.liveSearchEnabled,
+          );
         }
       })
       .catch(() => undefined);
@@ -274,6 +287,13 @@ function LauncherWindow() {
       canceled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (liveSearchEnabled) {
+      return;
+    }
+    clearSearch();
+  }, [liveSearchEnabled]);
 
   useEffect(() => {
     let canceled = false;
@@ -305,7 +325,7 @@ function LauncherWindow() {
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [apps, query]);
+  }, [apps, query, liveSearchEnabled]);
 
   useLayoutEffect(() => {
     if (!tooltip || !tooltipRef.current) {
@@ -518,6 +538,9 @@ function LauncherWindow() {
   }
 
   function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (!liveSearchEnabled) {
+      return;
+    }
     if (event.key === "Enter" && filteredApps.length > 0) {
       event.preventDefault();
       void launchApp(filteredApps[0]);
@@ -592,6 +615,7 @@ function LauncherWindow() {
           <span>应用列表</span>
         </div>
         <div className="toolbar">
+          {liveSearchEnabled ? (
           <div className="search-box">
             <span aria-hidden="true">⌕</span>
             <input
@@ -611,6 +635,7 @@ function LauncherWindow() {
               />
             ) : null}
           </div>
+          ) : null}
           <button
             type="button"
             className="toolbar-button"
@@ -815,6 +840,8 @@ function SettingsWindow() {
             ...defaultSettings,
             ...loaded,
             iconSize: loaded.iconSize || defaultSettings.iconSize,
+            liveSearchEnabled: Boolean(loaded.liveSearchEnabled),
+            autoAddDesktopShortcut: Boolean(loaded.autoAddDesktopShortcut),
             autostartEnabled: Boolean(loaded.autostartEnabled),
             physicalDeleteEnabled: Boolean(loaded.physicalDeleteEnabled),
             showHiddenApps: Boolean(loaded.showHiddenApps),
@@ -885,7 +912,12 @@ function SettingsWindow() {
   }
 
   function updateBooleanSetting(
-    name: "autostartEnabled" | "physicalDeleteEnabled" | "showHiddenApps",
+    name:
+      | "autostartEnabled"
+      | "physicalDeleteEnabled"
+      | "showHiddenApps"
+      | "liveSearchEnabled"
+      | "autoAddDesktopShortcut",
     checked: boolean,
   ) {
     setSettings((current) => ({
@@ -1047,7 +1079,13 @@ function SettingsWindow() {
           </label>
           <label className="checkbox-row">
             <span>开启实时搜索功能</span>
-            <input type="checkbox" defaultChecked />
+            <input
+              type="checkbox"
+              checked={settings.liveSearchEnabled}
+              onChange={(event) =>
+                updateBooleanSetting("liveSearchEnabled", event.currentTarget.checked)
+              }
+            />
           </label>
           <label>
             <span>搜索执行延迟(毫秒)</span>
@@ -1091,7 +1129,16 @@ function SettingsWindow() {
           </label>
           <label className="checkbox-row">
             <span>自动添加桌面快捷方式</span>
-            <input type="checkbox" />
+            <input
+              type="checkbox"
+              checked={settings.autoAddDesktopShortcut}
+              onChange={(event) =>
+                updateBooleanSetting(
+                  "autoAddDesktopShortcut",
+                  event.currentTarget.checked,
+                )
+              }
+            />
           </label>
           <label className="checkbox-row">
             <span>物理删除应用记录</span>

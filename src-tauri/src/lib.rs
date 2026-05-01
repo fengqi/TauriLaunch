@@ -66,6 +66,10 @@ fn default_icon_size() -> u32 {
     DEFAULT_ICON_SIZE
 }
 
+fn default_live_search_enabled() -> bool {
+    true
+}
+
 fn default_watched_directories() -> Vec<String> {
     Vec::new()
 }
@@ -83,6 +87,10 @@ struct AppSettings {
     manual_launch_mode: LaunchMode,
     #[serde(default = "default_icon_size")]
     icon_size: u32,
+    #[serde(default = "default_live_search_enabled")]
+    live_search_enabled: bool,
+    #[serde(default)]
+    auto_add_desktop_shortcut: bool,
     #[serde(default)]
     autostart_enabled: bool,
     #[serde(default)]
@@ -101,6 +109,8 @@ impl Default for AppSettings {
             startup_launch_mode: default_startup_launch_mode(),
             manual_launch_mode: default_manual_launch_mode(),
             icon_size: default_icon_size(),
+            live_search_enabled: default_live_search_enabled(),
+            auto_add_desktop_shortcut: false,
             autostart_enabled: is_autostart_enabled(),
             physical_delete_enabled: false,
             show_hidden_apps: false,
@@ -178,6 +188,8 @@ fn get_settings() -> AppSettings {
 fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
     configure_autostart(settings.autostart_enabled).map_err(|error| error.to_string())?;
     store_settings(&settings).map_err(|error| error.to_string())?;
+    ensure_launcher_desktop_shortcut(settings.auto_add_desktop_shortcut)
+        .map_err(|error| error.to_string())?;
     let _ = app.emit("settings-updated", settings);
     Ok(())
 }
@@ -654,6 +666,69 @@ fn open_stored_app_directory(app_id: &str) -> io::Result<()> {
     #[cfg(target_os = "windows")]
     command.creation_flags(CREATE_NO_WINDOW);
     command.spawn().map(|_| ())
+}
+
+fn ensure_launcher_desktop_shortcut(enabled: bool) -> io::Result<()> {
+    let desktop = desktop_dir()?;
+    let shortcut_path = desktop.join("TauriLaunch.lnk");
+
+    if !enabled {
+        if shortcut_path.exists() {
+            let _ = fs::remove_file(shortcut_path);
+        }
+        return Ok(());
+    }
+
+    if shortcut_path.exists() {
+        return Ok(());
+    }
+
+    let current_exe = std::env::current_exe()?;
+    let target_path = current_exe.to_string_lossy().to_string();
+    let working_directory = current_exe
+        .parent()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let command = format!(
+        r#"$shortcutPath = {shortcut_path}
+$targetPath = {target_path}
+$arguments = ''
+$workingDirectory = {working_directory}
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $targetPath
+$shortcut.Arguments = $arguments
+if ($workingDirectory) {{ $shortcut.WorkingDirectory = $workingDirectory }}
+$shortcut.Save()
+"#,
+        shortcut_path = powershell_single_quoted(&shortcut_path),
+        target_path = powershell_single_quoted_text(&target_path),
+        working_directory = powershell_single_quoted_text(&working_directory),
+    );
+
+    let mut ps = Command::new("powershell");
+    ps.arg("-NoProfile").arg("-Command").arg(command);
+    #[cfg(target_os = "windows")]
+    ps.creation_flags(CREATE_NO_WINDOW);
+    let output = ps.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    ))
+}
+
+fn desktop_dir() -> io::Result<PathBuf> {
+    let user_profile = std::env::var("USERPROFILE")
+        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "USERPROFILE not found"))?;
+    let desktop = PathBuf::from(user_profile).join("Desktop");
+    if desktop.is_dir() {
+        return Ok(desktop);
+    }
+    Err(io::Error::new(io::ErrorKind::NotFound, "Desktop not found"))
 }
 
 fn start_process(app: &AppEntry) -> io::Result<()> {
