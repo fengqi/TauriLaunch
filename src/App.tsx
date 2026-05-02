@@ -260,7 +260,7 @@ function LauncherWindow() {
       clearSearch();
     });
     const unlistenScanFailed = listen<string>("scan-failed", (event) => {
-      setError(event.payload);
+      setError(`扫描失败：${event.payload}`);
       setScanning(false);
     });
     const unlistenScanState = listen<boolean>("scan-state-changed", (event) => {
@@ -683,10 +683,10 @@ function LauncherWindow() {
         </div>
       </header>
 
+      {error ? <section className="app-state error-state">{error}</section> : null}
+
       {loading ? (
         <section className="app-state">正在扫描应用...</section>
-      ) : error ? (
-        <section className="app-state error-state">扫描失败：{error}</section>
       ) : filteredApps.length === 0 ? (
         <section className="app-state">
           {query.trim()

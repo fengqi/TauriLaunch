@@ -768,7 +768,7 @@ fn start_process(app: &AppEntry) -> io::Result<()> {
     let working_dir = if app.working_dir.trim().is_empty() {
         path.parent().map(Path::to_path_buf)
     } else {
-        Some(PathBuf::from(app.working_dir.trim()))
+        Some(PathBuf::from(expand_env_placeholders(app.working_dir.trim())))
     };
 
     if let Some(working_dir) = &working_dir {
@@ -1190,7 +1190,57 @@ fn app_launch_target_exists(app: &AppEntry) -> bool {
         return true;
     }
 
-    Path::new(working_dir).is_dir()
+    let expanded = expand_env_placeholders(working_dir);
+    Path::new(&expanded).is_dir()
+}
+
+fn expand_env_placeholders(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+
+    let chars: Vec<char> = value.chars().collect();
+    let mut result = String::new();
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index] != '%' {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let mut end = index + 1;
+        while end < chars.len() && chars[end] != '%' {
+            end += 1;
+        }
+
+        if end >= chars.len() {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let name: String = chars[index + 1..end].iter().collect();
+        if name.is_empty() {
+            result.push('%');
+            index += 1;
+            continue;
+        }
+
+        match std::env::var(&name) {
+            Ok(expanded) => result.push_str(&expanded),
+            Err(_) => {
+                result.push('%');
+                result.push_str(&name);
+                result.push('%');
+            }
+        }
+
+        index = end + 1;
+    }
+
+    result
 }
 
 fn is_shell_apps_folder_path(value: &str) -> bool {
