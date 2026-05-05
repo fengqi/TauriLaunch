@@ -43,6 +43,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const ERROR_ELEVATION_REQUIRED: i32 = 740;
 static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
 static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
+static ICON_CACHE_REBUILD_RUNNING: AtomicBool = AtomicBool::new(false);
 static MAIN_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 static MAIN_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static SETTINGS_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -159,6 +160,8 @@ struct AppEntry {
     search_text: String,
     #[serde(default)]
     icon_path: String,
+    #[serde(default)]
+    icon_source: String,
     source: String,
     #[serde(default)]
     hidden: bool,
@@ -172,6 +175,8 @@ struct ShortcutInfo {
     target_path: String,
     arguments: String,
     working_directory: String,
+    #[serde(default)]
+    icon_location: String,
     #[serde(default)]
     app_user_model_id: String,
 }
@@ -227,6 +232,16 @@ fn get_apps() -> Vec<AppEntry> {
 #[tauri::command]
 fn scan_apps(app: AppHandle) {
     spawn_scan(app);
+}
+
+#[tauri::command]
+fn rebuild_icon_cache(app: AppHandle) {
+    spawn_icon_cache_rebuild(app);
+}
+
+#[tauri::command]
+fn rebuild_single_icon_cache(app: AppHandle, app_id: String) {
+    spawn_single_icon_cache_rebuild(app, app_id);
 }
 
 #[tauri::command]
@@ -410,6 +425,54 @@ fn scan_store_and_emit(app: &AppHandle) -> io::Result<Vec<AppEntry>> {
     Ok(visible)
 }
 
+fn spawn_icon_cache_rebuild(app: AppHandle) {
+    if ICON_CACHE_REBUILD_RUNNING.swap(true, Ordering::Relaxed) {
+        emit_icon_cache_rebuild_state(&app, true);
+        return;
+    }
+
+    emit_icon_cache_rebuild_state(&app, true);
+    thread::spawn(move || {
+        match rebuild_icon_cache_store_and_emit(&app) {
+            Ok(_) => {
+                let _ = app.emit("icon-cache-rebuild-finished", ());
+            }
+            Err(error) => {
+                eprintln!("icon cache rebuild failed: {error}");
+                let _ = app.emit("icon-cache-rebuild-failed", error.to_string());
+            }
+        }
+        ICON_CACHE_REBUILD_RUNNING.store(false, Ordering::Relaxed);
+        emit_icon_cache_rebuild_state(&app, false);
+    });
+}
+
+fn spawn_single_icon_cache_rebuild(app: AppHandle, app_id: String) {
+    if ICON_CACHE_REBUILD_RUNNING.swap(true, Ordering::Relaxed) {
+        emit_icon_cache_rebuild_state(&app, true);
+        return;
+    }
+
+    emit_icon_cache_rebuild_state(&app, true);
+    thread::spawn(move || {
+        match rebuild_single_icon_cache_store_and_emit(&app, &app_id) {
+            Ok(_) => {
+                let _ = app.emit("icon-cache-rebuild-finished", ());
+            }
+            Err(error) => {
+                eprintln!("icon cache rebuild failed: {error}");
+                let _ = app.emit("icon-cache-rebuild-failed", error.to_string());
+            }
+        }
+        ICON_CACHE_REBUILD_RUNNING.store(false, Ordering::Relaxed);
+        emit_icon_cache_rebuild_state(&app, false);
+    });
+}
+
+fn emit_icon_cache_rebuild_state(app: &AppHandle, active: bool) {
+    let _ = app.emit("icon-cache-rebuild-state-changed", active);
+}
+
 fn emit_apps_updated_to_visible_main(app: &AppHandle, apps: &[AppEntry]) {
     let Some(window) = app.get_webview_window(MAIN_LABEL) else {
         return;
@@ -420,6 +483,52 @@ fn emit_apps_updated_to_visible_main(app: &AppHandle, apps: &[AppEntry]) {
     }
 
     let _ = window.emit("apps-updated", apps.to_vec());
+}
+
+fn rebuild_icon_cache_store_and_emit(app: &AppHandle) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    for app in &mut apps {
+        rebuild_app_icon_cache(app);
+    }
+
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    let visible = configured_apps(apps);
+    emit_apps_updated_to_visible_main(app, &visible);
+    Ok(visible)
+}
+
+fn rebuild_single_icon_cache_store_and_emit(
+    app_handle: &AppHandle,
+    app_id: &str,
+) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let Some(app) = apps.iter_mut().find(|app| app.id == app_id) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "application not found",
+        ));
+    };
+
+    rebuild_app_icon_cache(app);
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    let visible = configured_apps(apps);
+    emit_apps_updated_to_visible_main(app_handle, &visible);
+    Ok(visible)
+}
+
+fn rebuild_app_icon_cache(app: &mut AppEntry) {
+    remove_icon_cache(app);
+
+    if app.source.to_lowercase().ends_with(".lnk") {
+        if let Some(shortcut) = read_shortcut(Path::new(&app.source)) {
+            app.icon_source = shortcut.icon_location.trim().to_string();
+        }
+    }
+
+    app.icon_path = ensure_icon_cache(&app.id, &app.source, &app.path, &app.icon_source, true)
+        .unwrap_or_default();
 }
 
 fn emit_scan_failed_to_visible_main(app: &AppHandle, error: &str) {
@@ -1051,6 +1160,7 @@ fn scan_start_apps(
             String::new(),
             String::new(),
             source,
+            String::new(),
             false,
         );
 
@@ -1182,9 +1292,7 @@ fn normalize_key(value: &str) -> String {
 }
 
 fn can_reuse_scanned_app(app: &AppEntry) -> bool {
-    app_launch_target_exists(app)
-        && app_icon_cache_current(app).unwrap_or(false)
-        && split_launch_args(&app.launch_args).is_ok()
+    app_launch_target_exists(app) && split_launch_args(&app.launch_args).is_ok()
 }
 
 fn app_launch_target_exists(app: &AppEntry) -> bool {
@@ -1262,19 +1370,6 @@ fn is_shell_apps_folder_path(value: &str) -> bool {
         .starts_with("shell:appsfolder\\")
 }
 
-fn app_icon_cache_current(app: &AppEntry) -> io::Result<bool> {
-    let icon_path = app.icon_path.trim();
-    if icon_path.is_empty() {
-        return Ok(false);
-    }
-
-    let icon_path = Path::new(icon_path);
-    let expected_icon_path = expected_icon_cache_path_for(&app.id, &app.path)?;
-    Ok(normalize_key(icon_path.to_string_lossy().as_ref())
-        == normalize_key(expected_icon_path.to_string_lossy().as_ref())
-        && icon_path.is_file())
-}
-
 fn app_entry_from_exe(path: &Path, refresh_icon: bool) -> AppEntry {
     let path_text = path.to_string_lossy().into_owned();
     let name = file_stem(path);
@@ -1284,6 +1379,7 @@ fn app_entry_from_exe(path: &Path, refresh_icon: bool) -> AppEntry {
         String::new(),
         parent_dir(path),
         path_text,
+        String::new(),
         refresh_icon,
     )
 }
@@ -1326,6 +1422,7 @@ fn app_entry_from_shortcut(path: &Path, refresh_icon: bool) -> Option<AppEntry> 
             shortcut.working_directory.trim().to_string()
         },
         source,
+        shortcut.icon_location.trim().to_string(),
         refresh_icon,
     ))
 }
@@ -1346,6 +1443,7 @@ $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
   TargetPath = $shortcut.TargetPath
   Arguments = $shortcut.Arguments
   WorkingDirectory = $shortcut.WorkingDirectory
+  IconLocation = $shortcut.IconLocation
   AppUserModelID = $shortcutPath | ForEach-Object {{
     $folderPath = Split-Path -LiteralPath $_
     $fileName = Split-Path -Leaf $_
@@ -1387,6 +1485,7 @@ fn build_app_entry(
     launch_args: String,
     working_dir: String,
     source: String,
+    icon_source: String,
     refresh_icon: bool,
 ) -> AppEntry {
     let id = stable_id(&source, &path, &launch_args);
@@ -1397,7 +1496,9 @@ fn build_app_entry(
         custom_name: String::new(),
         initials,
         search_text,
-        icon_path: ensure_icon_cache(&id, &source, &path, refresh_icon).unwrap_or_default(),
+        icon_path: ensure_icon_cache(&id, &source, &path, &icon_source, refresh_icon)
+            .unwrap_or_default(),
+        icon_source,
         accent: accent_color(&id),
         name,
         path,
@@ -1435,7 +1536,13 @@ fn expected_icon_cache_path_for(id: &str, path: &str) -> io::Result<PathBuf> {
     expected_icon_cache_path(id)
 }
 
-fn ensure_icon_cache(id: &str, source: &str, path: &str, refresh: bool) -> io::Result<String> {
+fn ensure_icon_cache(
+    id: &str,
+    source: &str,
+    path: &str,
+    icon_source: &str,
+    refresh: bool,
+) -> io::Result<String> {
     let icon_path = expected_icon_cache_path_for(id, path)?;
     if let Some(directory) = icon_path.parent() {
         fs::create_dir_all(directory)?;
@@ -1449,15 +1556,21 @@ fn ensure_icon_cache(id: &str, source: &str, path: &str, refresh: bool) -> io::R
         let _ = fs::remove_file(&icon_path);
     }
 
-    extract_icon_to_png(source, path, &icon_path)?;
+    extract_icon_to_png(source, path, icon_source, &icon_path)?;
     Ok(icon_path.to_string_lossy().into_owned())
 }
 
-fn extract_icon_to_png(source: &str, path: &str, output: &Path) -> io::Result<()> {
+fn extract_icon_to_png(
+    source: &str,
+    path: &str,
+    icon_source: &str,
+    output: &Path,
+) -> io::Result<()> {
     if is_shell_apps_folder_path(path) {
         return extract_shell_app_icon_to_png(path, output);
     }
 
+    let icon_source = powershell_single_quoted_text(icon_source);
     let source = powershell_single_quoted_text(source);
     let path = powershell_single_quoted_text(path);
     let output = powershell_single_quoted(output);
@@ -1477,26 +1590,72 @@ public static class IconNative {{
   public static extern bool DestroyIcon(IntPtr hIcon);
 }}
 "@
+function Test-UsefulIconBitmap($bitmap) {{
+  $visiblePixels = 0
+  $coloredPixels = 0
+  for ($x = 0; $x -lt $bitmap.Width; $x++) {{
+    for ($y = 0; $y -lt $bitmap.Height; $y++) {{
+      $pixel = $bitmap.GetPixel($x, $y)
+      if ($pixel.A -le 16) {{
+        continue
+      }}
+
+      $visiblePixels++
+      if (
+        $pixel.R -lt 245 -or
+        $pixel.G -lt 245 -or
+        $pixel.B -lt 245
+      ) {{
+        $coloredPixels++
+      }}
+    }}
+  }}
+
+  return $visiblePixels -ge 32 -and $coloredPixels -ge 16
+}}
+
 $outputPath = {output}
-$candidates = @({path}, {source})
+$rawCandidates = @({icon_source}, {path}, {source})
+$candidates = foreach ($rawCandidate in $rawCandidates) {{
+  if ([string]::IsNullOrWhiteSpace($rawCandidate)) {{
+    continue
+  }}
+
+  $candidatePath = $rawCandidate.Trim()
+  $iconIndex = 0
+  if (-not (Test-Path -LiteralPath $candidatePath) -and $candidatePath -match '^(.*),(-?\d+)$') {{
+    $candidatePath = $Matches[1].Trim()
+    $iconIndex = [int]$Matches[2]
+  }}
+
+  [pscustomobject]@{{
+    Path = $candidatePath
+    Index = $iconIndex
+  }}
+}}
 $sizes = @({ICON_CACHE_SIZE}, 64, 48, 32)
 foreach ($candidate in $candidates) {{
-  if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {{
+  if ([string]::IsNullOrWhiteSpace($candidate.Path) -or -not (Test-Path -LiteralPath $candidate.Path)) {{
     continue
   }}
   foreach ($size in $sizes) {{
     $handles = New-Object IntPtr[] 1
     $ids = New-Object UInt32[] 1
-    $count = [IconNative]::PrivateExtractIcons($candidate, 0, $size, $size, $handles, $ids, 1, 0)
+    $count = [IconNative]::PrivateExtractIcons($candidate.Path, $candidate.Index, $size, $size, $handles, $ids, 1, 0)
     if ($count -gt 0 -and $handles[0] -ne [IntPtr]::Zero) {{
       try {{
         $sourceIcon = [System.Drawing.Icon]::FromHandle($handles[0])
         $icon = [System.Drawing.Icon]$sourceIcon.Clone()
         $bitmap = $icon.ToBitmap()
-        $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        if (Test-UsefulIconBitmap $bitmap) {{
+          $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          $bitmap.Dispose()
+          $icon.Dispose()
+          exit 0
+        }}
+
         $bitmap.Dispose()
         $icon.Dispose()
-        exit 0
       }} finally {{
         [IconNative]::DestroyIcon($handles[0]) | Out-Null
       }}
@@ -1505,17 +1664,22 @@ foreach ($candidate in $candidates) {{
 }}
 
 foreach ($candidate in $candidates) {{
-  if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {{
+  if ([string]::IsNullOrWhiteSpace($candidate.Path) -or -not (Test-Path -LiteralPath $candidate.Path)) {{
     continue
   }}
   try {{
-    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($candidate)
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($candidate.Path)
     if ($null -ne $icon) {{
       $bitmap = $icon.ToBitmap()
-      $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+      if (Test-UsefulIconBitmap $bitmap) {{
+        $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bitmap.Dispose()
+        $icon.Dispose()
+        exit 0
+      }}
+
       $bitmap.Dispose()
       $icon.Dispose()
-      exit 0
     }}
   }} catch {{}}
 }}
@@ -1940,6 +2104,7 @@ mod tests {
             String::new(),
             format!(r"C:\Apps\{name}"),
             format!(r"C:\Apps\{name}\{name}.lnk"),
+            String::new(),
             false,
         )
     }
@@ -2350,6 +2515,8 @@ pub fn run() {
             open_app_directory,
             get_apps,
             scan_apps,
+            rebuild_icon_cache,
+            rebuild_single_icon_cache,
             set_main_dialog_open,
             search_apps,
             add_app,

@@ -546,6 +546,7 @@ button {
 }
 
 .compact-row label,
+.settings-action-row,
 .form-grid label {
   display: grid;
   grid-template-columns: 178px 136px;
@@ -569,6 +570,11 @@ button {
   color: #57606a;
   font-size: 12px;
   text-align: right;
+}
+
+.settings-inline-message {
+  color: #57606a;
+  font-size: 12px;
 }
 
 .checkbox-row input {

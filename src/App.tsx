@@ -98,6 +98,10 @@ function normalizePercentSetting(value: number, fallback: number) {
   return Math.min(100, Math.max(0, Math.round(value)));
 }
 
+function iconAssetSrc(path: string, version: number) {
+  return `${convertFileSrc(path)}?v=${version}`;
+}
+
 function App() {
   const view = new URLSearchParams(window.location.search).get("view") ?? "main";
 
@@ -166,6 +170,8 @@ function LauncherWindow() {
   const [query, setQuery] = useState("");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [filteredApps, setFilteredApps] = useState<AppEntry[]>([]);
+  const [brokenIconIds, setBrokenIconIds] = useState<Set<string>>(new Set());
+  const [iconAssetVersion, setIconAssetVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [iconSize, setIconSize] = useState(defaultSettings.iconSize);
@@ -223,6 +229,8 @@ function LauncherWindow() {
         if (!canceled) {
           setApps(loadedApps);
           setFilteredApps(loadedApps);
+          setBrokenIconIds(new Set());
+          setIconAssetVersion((current) => current + 1);
           setError("");
         }
       })
@@ -239,6 +247,8 @@ function LauncherWindow() {
 
     const unlisten = listen<AppEntry[]>("apps-updated", (event) => {
       setApps(event.payload);
+      setBrokenIconIds(new Set());
+      setIconAssetVersion((current) => current + 1);
       setLoading(false);
       const keyword = queryRef.current.trim();
       if (!keyword) {
@@ -288,6 +298,12 @@ function LauncherWindow() {
     const unlistenFocusSearch = listen("focus-search", () => {
       focusSearchInput();
     });
+    const unlistenIconCacheRebuilt = listen("icon-cache-rebuild-finished", () => {
+      void invoke<AppEntry[]>("get_apps")
+        .then((updatedApps) => applyUpdatedApps(updatedApps))
+        .then(() => setIconAssetVersion((current) => current + 1))
+        .catch((reason) => setError(String(reason)));
+    });
 
     focusSearchInput();
 
@@ -299,6 +315,7 @@ function LauncherWindow() {
       void unlistenScanFailed.then((dispose) => dispose());
       void unlistenScanState.then((dispose) => dispose());
       void unlistenFocusSearch.then((dispose) => dispose());
+      void unlistenIconCacheRebuilt.then((dispose) => dispose());
     };
   }, []);
 
@@ -428,6 +445,7 @@ function LauncherWindow() {
       });
       clearSearch();
       setApps(updatedApps);
+      setBrokenIconIds(new Set());
       setFilteredApps(updatedApps);
       setTooltip(null);
       setError("");
@@ -435,6 +453,7 @@ function LauncherWindow() {
       setError(String(reason));
       const updatedApps = await invoke<AppEntry[]>("get_apps");
       setApps(updatedApps);
+      setBrokenIconIds(new Set());
       if (!query.trim()) {
         setFilteredApps(updatedApps);
       }
@@ -443,6 +462,7 @@ function LauncherWindow() {
 
   async function applyUpdatedApps(updatedApps: AppEntry[]) {
     setApps(updatedApps);
+    setBrokenIconIds(new Set());
     if (!query.trim()) {
       setFilteredApps(updatedApps);
       return;
@@ -494,6 +514,15 @@ function LauncherWindow() {
   async function openAppDirectory(app: AppEntry) {
     try {
       await invoke("open_app_directory", { appId: app.id });
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function rebuildAppIcon(app: AppEntry) {
+    try {
+      await invoke("rebuild_single_icon_cache", { appId: app.id });
       setError("");
     } catch (reason) {
       setError(String(reason));
@@ -565,6 +594,7 @@ function LauncherWindow() {
         path: selected,
       });
       setApps(updatedApps);
+      setBrokenIconIds(new Set());
       if (!query.trim()) {
         setFilteredApps(updatedApps);
       } else {
@@ -746,9 +776,15 @@ function LauncherWindow() {
               onFocus={(event) => showAppTooltip(app, event)}
               onBlur={hideAppTooltip}
             >
-              {app.iconPath ? (
+              {app.iconPath && !brokenIconIds.has(app.id) ? (
                 <span className="app-icon image-icon">
-                  <img src={convertFileSrc(app.iconPath)} alt="" />
+                  <img
+                    src={iconAssetSrc(app.iconPath, iconAssetVersion)}
+                    alt=""
+                    onError={() =>
+                      setBrokenIconIds((current) => new Set(current).add(app.id))
+                    }
+                  />
                 </span>
               ) : (
                 <span className="app-icon" style={{ background: app.accent }}>
@@ -831,6 +867,15 @@ function LauncherWindow() {
           </button>
           <button
             type="button"
+            onClick={() => {
+              closeContextMenu();
+              void rebuildAppIcon(contextMenu.app);
+            }}
+          >
+            重建图标
+          </button>
+          <button
+            type="button"
             className="danger"
             onClick={() => {
               closeContextMenu();
@@ -875,6 +920,8 @@ function SettingsWindow() {
   const [directoryInput, setDirectoryInput] = useState("");
   const [selectedDirectory, setSelectedDirectory] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [iconCacheMessage, setIconCacheMessage] = useState("");
+  const [rebuildingIconCache, setRebuildingIconCache] = useState(false);
 
   useEffect(() => {
     let canceled = false;
@@ -914,6 +961,36 @@ function SettingsWindow() {
     };
   }, []);
 
+  useEffect(() => {
+    const unlistenRebuildState = listen<boolean>(
+      "icon-cache-rebuild-state-changed",
+      (event) => {
+        setRebuildingIconCache(Boolean(event.payload));
+        if (event.payload) {
+          setIconCacheMessage("图标缓存正在后台重建");
+        }
+      },
+    );
+    const unlistenRebuildFinished = listen("icon-cache-rebuild-finished", () => {
+      setRebuildingIconCache(false);
+      setIconCacheMessage("图标缓存已重建");
+    });
+    const unlistenRebuildFailed = listen<string>(
+      "icon-cache-rebuild-failed",
+      (event) => {
+        setRebuildingIconCache(false);
+        setIconCacheMessage("");
+        setSaveError(event.payload);
+      },
+    );
+
+    return () => {
+      void unlistenRebuildState.then((dispose) => dispose());
+      void unlistenRebuildFinished.then((dispose) => dispose());
+      void unlistenRebuildFailed.then((dispose) => dispose());
+    };
+  }, []);
+
   async function saveAndClose() {
     try {
       setSaveError("");
@@ -926,6 +1003,18 @@ function SettingsWindow() {
 
   async function closeSettings() {
     await invoke("close_settings_window");
+  }
+
+  async function rebuildIconCache() {
+    try {
+      setSaveError("");
+      setIconCacheMessage("图标缓存正在后台重建");
+      setRebuildingIconCache(true);
+      await invoke("rebuild_icon_cache");
+    } catch (error) {
+      setSaveError(String(error));
+      setRebuildingIconCache(false);
+    }
   }
 
   function updateNumberSetting(
@@ -1120,6 +1209,19 @@ function SettingsWindow() {
               <span>{settings.tooltipOpacity}</span>
             </div>
           </label>
+          <div className="settings-action-row">
+            <span>图标缓存</span>
+            <button
+              type="button"
+              onClick={() => void rebuildIconCache()}
+              disabled={rebuildingIconCache}
+            >
+              {rebuildingIconCache ? "重建中..." : "重建全部缓存"}
+            </button>
+          </div>
+          {iconCacheMessage ? (
+            <span className="settings-inline-message">{iconCacheMessage}</span>
+          ) : null}
         </div>
       );
     }

@@ -112,12 +112,16 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 悬停提示透明度保存为 `tooltipOpacity`，范围 `0`-`100`，默认 `0`；前端显示时转换为 CSS `opacity = 1 - tooltipOpacity / 100`。
 - 实时搜索默认启用，默认延迟为 `120` 毫秒；回车启动首个匹配项默认启用。三个字段分别保存为 `liveSearchEnabled`、`searchDelayMs`、`enterLaunchEnabled`。
 - 图标缓存路径为 `%LOCALAPPDATA%\TauriLaunch\icons\{id}-128.png`；应用商店 / MSIX 条目使用 `{id}-shell-128.png`，用于区分按 Appx 清单生成的裁边图标。
-- 图标提取优先通过 Windows `PrivateExtractIcons` 请求 128、64、48、32 档图标；失败时再回退到 `ExtractAssociatedIcon`。
+- 图标提取优先通过 Windows `PrivateExtractIcons` 请求 128、64、48、32 档图标；失败时再回退到 `ExtractAssociatedIcon`。`.lnk` 条目优先使用快捷方式 `IconLocation`，支持 `path,index` 格式，例如 `app.ico,0`。提取到全透明或近似空白位图时不写入缓存，继续尝试下一个候选来源；所有候选都无有效图标时保留为空图标路径，由前端显示首字母占位。
+- 右键菜单 `重建图标` 调用 `rebuild_single_icon_cache` 命令，只对当前应用后台重建图标缓存。
+- 设置页 `图标设置` 的 `重建全部缓存` 调用 `rebuild_icon_cache` 命令；命令只启动后台线程并立即返回，不阻塞设置窗口。后台任务遍历现有 `apps.json` 条目并显式重建图标缓存；该动作会重新读取 `.lnk` 的 `IconLocation`，写回新的 `iconPath` 和 `iconSource`。
+- 图标缓存重建由 `ICON_CACHE_REBUILD_RUNNING` 防重复；开始和结束会发送 `icon-cache-rebuild-state-changed`，完成发送 `icon-cache-rebuild-finished`，失败发送 `icon-cache-rebuild-failed`。
+- 主窗口监听 `icon-cache-rebuild-finished` 后重新读取应用列表、清空破图状态，并递增前端图标资源版本参数，强制 WebView 重新加载同一路径图标；该动作不做额外磁盘检查。
 - 当前 `.lnk` 解析使用 PowerShell 调用 Windows WScript Shell COM，后续如果扫描性能不够，再替换为 Rust 侧直接 COM 调用。
-- `.lnk` 解析后必须确认目标文件存在；目标不存在的残留快捷方式不生成条目，也不进入图标提取。
+- `.lnk` 解析后必须确认目标文件存在；目标不存在的残留快捷方式不生成条目，也不进入图标提取。解析结果会保存 `iconSource`；普通扫描不会因为旧条目缺少该字段而自动刷新图标缓存。
 - 应用商店 / MSIX 应用不依赖监听目录快捷方式；扫描阶段调用 `Get-StartApps`，把带 `AppID` 的项目保存为 `shell:AppsFolder\...`，再通过 Appx 包清单里的 `Square150x150Logo` / `Square44x44Logo` 生成 128 图标缓存。
-- 扫描先按 `source` 查旧条目；旧条目目标文件存在、工作目录有效或为空、启动参数可解析、图标缓存路径是当前 `{id}-128.png` 格式且文件存在时，直接复用旧记录。需要重建条目时，旧 metadata 按 `id`、`source`、实际启动目标加启动参数依次匹配，避免来源变化导致启动次数清零。旧 `{id}-256.png` 数据会在下次扫描时被视为旧格式并重新生成 128 图标。
-- 图标缓存缺失、图标路径是旧格式、目标不存在、工作目录失效或启动参数不可解析时，不复用旧记录，重新解析 `.lnk` / `.exe` 并重新尝试图标提取。
+- 扫描先按 `source` 查旧条目；旧条目目标文件存在、工作目录有效或为空、启动参数可解析时，直接复用旧记录。普通扫描不检查缓存文件是否仍存在；文件存在性检查和补齐由设置页 `重建缓存` 显式触发。需要重建条目时，旧 metadata 按 `id`、`source`、实际启动目标加启动参数依次匹配，避免来源变化导致启动次数清零。
+- 目标不存在、工作目录失效或启动参数不可解析时，不复用旧记录，重新解析 `.lnk` / `.exe`。
 - `scan_apps` 只启动后台扫描线程并立即返回，不直接返回应用列表；托盘扫描和启动扫描也走同一后台扫描入口。
 - 后台扫描由进程内 `SCAN_RUNNING` 防重复；已有扫描运行时再次触发扫描会直接忽略。
 - 后台扫描开始和结束会发送 `scan-state-changed` 事件；扫描运行时托盘 `扫描` 菜单项通过保存的 `MenuItem` 置灰，主界面扫描按钮显示 spinner。
