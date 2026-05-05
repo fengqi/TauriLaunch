@@ -62,6 +62,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
   "enterLaunchEnabled": true,
   "autoAddDesktopShortcut": false,
   "iconSize": 38,
+  "tooltipOpacity": 0,
   "autostartEnabled": false,
   "physicalDeleteEnabled": false,
   "showHiddenApps": false,
@@ -108,6 +109,7 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 托盘 `轻量模式` 只在当前进程内生效，不保存到 JSON；轻量模式关闭/失焦时先隐藏窗口，60 秒后仍未重新打开才销毁 WebView。
 - 开机启动设置写入当前用户 `Run` 注册表项，启动参数为 `--startup`。
 - 图标大小可选 `32`、`38`、`48`，设置窗口不提供 `64`。
+- 悬停提示透明度保存为 `tooltipOpacity`，范围 `0`-`100`，默认 `0`；前端显示时转换为 CSS `opacity = 1 - tooltipOpacity / 100`。
 - 实时搜索默认启用，默认延迟为 `120` 毫秒；回车启动首个匹配项默认启用。三个字段分别保存为 `liveSearchEnabled`、`searchDelayMs`、`enterLaunchEnabled`。
 - 图标缓存路径为 `%LOCALAPPDATA%\TauriLaunch\icons\{id}-128.png`；应用商店 / MSIX 条目使用 `{id}-shell-128.png`，用于区分按 Appx 清单生成的裁边图标。
 - 图标提取优先通过 Windows `PrivateExtractIcons` 请求 128、64、48、32 档图标；失败时再回退到 `ExtractAssociatedIcon`。

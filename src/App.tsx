@@ -56,6 +56,7 @@ type AppSettings = {
   enterLaunchEnabled: boolean;
   autoAddDesktopShortcut: boolean;
   iconSize: number;
+  tooltipOpacity: number;
   autostartEnabled: boolean;
   physicalDeleteEnabled: boolean;
   showHiddenApps: boolean;
@@ -74,6 +75,7 @@ const defaultSettings: AppSettings = {
   enterLaunchEnabled: true,
   autoAddDesktopShortcut: false,
   iconSize: 38,
+  tooltipOpacity: 0,
   autostartEnabled: false,
   physicalDeleteEnabled: false,
   showHiddenApps: false,
@@ -87,6 +89,14 @@ const settingsTabs: { id: SettingsTab; label: string }[] = [
   { id: "other", label: "其他设置" },
   { id: "info", label: "信息" },
 ];
+
+function normalizePercentSetting(value: number, fallback: number) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
 
 function App() {
   const view = new URLSearchParams(window.location.search).get("view") ?? "main";
@@ -159,6 +169,9 @@ function LauncherWindow() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [iconSize, setIconSize] = useState(defaultSettings.iconSize);
+  const [tooltipOpacity, setTooltipOpacity] = useState(
+    defaultSettings.tooltipOpacity,
+  );
   const [liveSearchEnabled, setLiveSearchEnabled] = useState(
     defaultSettings.liveSearchEnabled,
   );
@@ -243,6 +256,12 @@ function LauncherWindow() {
     });
     const unlistenSettings = listen<AppSettings>("settings-updated", (event) => {
       setIconSize(event.payload.iconSize || defaultSettings.iconSize);
+      setTooltipOpacity(
+        normalizePercentSetting(
+          event.payload.tooltipOpacity,
+          defaultSettings.tooltipOpacity,
+        ),
+      );
       setLiveSearchEnabled(
         event.payload.liveSearchEnabled ?? defaultSettings.liveSearchEnabled,
       );
@@ -290,6 +309,12 @@ function LauncherWindow() {
       .then((settings) => {
         if (!canceled) {
           setIconSize(settings.iconSize || defaultSettings.iconSize);
+          setTooltipOpacity(
+            normalizePercentSetting(
+              settings.tooltipOpacity,
+              defaultSettings.tooltipOpacity,
+            ),
+          );
           setLiveSearchEnabled(
             settings.liveSearchEnabled ?? defaultSettings.liveSearchEnabled,
           );
@@ -821,7 +846,10 @@ function LauncherWindow() {
         <div
           ref={tooltipRef}
           className="app-tooltip-floating"
-          style={tooltipStyle}
+          style={{
+            ...tooltipStyle,
+            opacity: 1 - tooltipOpacity / 100,
+          }}
         >
           <span>启动次数: {tooltip.app.launches}</span>
           <span>路径: {tooltip.app.path}</span>
@@ -858,6 +886,10 @@ function SettingsWindow() {
             ...defaultSettings,
             ...loaded,
             iconSize: loaded.iconSize || defaultSettings.iconSize,
+            tooltipOpacity: normalizePercentSetting(
+              loaded.tooltipOpacity,
+              defaultSettings.tooltipOpacity,
+            ),
             liveSearchEnabled: Boolean(loaded.liveSearchEnabled),
             searchDelayMs: loaded.searchDelayMs ?? defaultSettings.searchDelayMs,
             enterLaunchEnabled:
@@ -929,6 +961,16 @@ function SettingsWindow() {
     setSettings((current) => ({
       ...current,
       iconSize,
+    }));
+  }
+
+  function updateTooltipOpacity(value: string) {
+    setSettings((current) => ({
+      ...current,
+      tooltipOpacity: normalizePercentSetting(
+        Number.parseInt(value, 10),
+        defaultSettings.tooltipOpacity,
+      ),
     }));
   }
 
@@ -1062,6 +1104,21 @@ function SettingsWindow() {
               <option value="38">38x38</option>
               <option value="48">48x48</option>
             </select>
+          </label>
+          <label>
+            <span>设置透明度</span>
+            <div className="range-control">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={settings.tooltipOpacity}
+                onChange={(event) =>
+                  updateTooltipOpacity(event.currentTarget.value)
+                }
+              />
+              <span>{settings.tooltipOpacity}</span>
+            </div>
           </label>
         </div>
       );

@@ -33,6 +33,7 @@ const ABOUT_LABEL: &str = "about";
 const DEFAULT_RIGHT_OFFSET: i32 = 10;
 const DEFAULT_BOTTOM_OFFSET: i32 = 10;
 const DEFAULT_ICON_SIZE: u32 = 38;
+const DEFAULT_TOOLTIP_OPACITY: u32 = 0;
 const ICON_CACHE_SIZE: u32 = 128;
 const LIGHTWEIGHT_DESTROY_DELAY: Duration = Duration::from_secs(60);
 const AUTOSTART_NAME: &str = "TauriLaunch";
@@ -66,6 +67,10 @@ fn default_icon_size() -> u32 {
     DEFAULT_ICON_SIZE
 }
 
+fn default_tooltip_opacity() -> u32 {
+    DEFAULT_TOOLTIP_OPACITY
+}
+
 fn default_live_search_enabled() -> bool {
     true
 }
@@ -96,6 +101,8 @@ struct AppSettings {
     manual_launch_mode: LaunchMode,
     #[serde(default = "default_icon_size")]
     icon_size: u32,
+    #[serde(default = "default_tooltip_opacity")]
+    tooltip_opacity: u32,
     #[serde(default = "default_live_search_enabled")]
     live_search_enabled: bool,
     #[serde(default = "default_search_delay_ms")]
@@ -122,6 +129,7 @@ impl Default for AppSettings {
             startup_launch_mode: default_startup_launch_mode(),
             manual_launch_mode: default_manual_launch_mode(),
             icon_size: default_icon_size(),
+            tooltip_opacity: default_tooltip_opacity(),
             live_search_enabled: default_live_search_enabled(),
             search_delay_ms: default_search_delay_ms(),
             enter_launch_enabled: default_enter_launch_enabled(),
@@ -195,12 +203,14 @@ fn default_bottom_offset() -> i32 {
 #[tauri::command]
 fn get_settings() -> AppSettings {
     let mut settings = load_settings().unwrap_or_default();
+    settings.tooltip_opacity = settings.tooltip_opacity.min(100);
     settings.autostart_enabled = is_autostart_enabled();
     settings
 }
 
 #[tauri::command]
-fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+fn save_settings(app: AppHandle, mut settings: AppSettings) -> Result<(), String> {
+    settings.tooltip_opacity = settings.tooltip_opacity.min(100);
     configure_autostart(settings.autostart_enabled).map_err(|error| error.to_string())?;
     store_settings(&settings).map_err(|error| error.to_string())?;
     ensure_launcher_desktop_shortcut(settings.auto_add_desktop_shortcut)
@@ -768,7 +778,9 @@ fn start_process(app: &AppEntry) -> io::Result<()> {
     let working_dir = if app.working_dir.trim().is_empty() {
         path.parent().map(Path::to_path_buf)
     } else {
-        Some(PathBuf::from(expand_env_placeholders(app.working_dir.trim())))
+        Some(PathBuf::from(expand_env_placeholders(
+            app.working_dir.trim(),
+        )))
     };
 
     if let Some(working_dir) = &working_dir {

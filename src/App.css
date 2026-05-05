@@ -539,6 +539,12 @@ button {
   padding: 0 7px;
 }
 
+.settings-shell input[type="range"] {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
 .compact-row label,
 .form-grid label {
   display: grid;
@@ -550,6 +556,19 @@ button {
 
 .form-grid {
   row-gap: 4px;
+}
+
+.range-control {
+  display: grid;
+  grid-template-columns: 1fr 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.range-control span {
+  color: #57606a;
+  font-size: 12px;
+  text-align: right;
 }
 
 .checkbox-row input {
