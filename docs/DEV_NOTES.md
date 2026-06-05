@@ -127,6 +127,8 @@ cmd /c "call `"$vsdev`" -arch=x64 && npm run tauri dev"
 - 后台扫描开始和结束会发送 `scan-state-changed` 事件；扫描运行时托盘 `扫描` 菜单项通过保存的 `MenuItem` 置灰，主界面扫描按钮显示 spinner。
 - 后台扫描完成后写入 `apps.json`；只有主窗口可见时才向主窗口发送 `apps-updated`。隐藏窗口或轻量模式销毁 WebView 时不主动刷新，下一次打开由 `get_apps` 读取最新数据。
 - 后台扫描失败时只在主窗口可见时发送 `scan-failed`，前端收到后显示错误。
+- 文件系统监控使用 `notify` crate 对每个监听目录开启 `NonRecursive` 监控；收到变动事件后通过 `WATCH_TRIGGER` 计数器实现 30 秒防抖，30 秒内无新事件才触发 `spawn_scan`。`WATCHER_GENERATION` 用于识别 watcher 代际，`save_settings` 检测到 `watchedDirectories` 变化时调用 `restart_directory_watcher` 重建 watcher。
+- 扫描范围改为只扫描监听目录第一层，不再递归子目录。`scan_directory` 函数移除 `pending` 栈，直接用 `fs::read_dir` 遍历单层。
 - `initials` 和 `searchText` 在 Rust 扫描阶段生成；`searchText` 只保存普通文本、路径、英文分词和英文首字母。
 - 中文拼音搜索由 Rust 后端 `search_apps` 命令使用 `ib-pinyin` 执行，前端不要重复计算拼音索引。
 - 真实启动由 Rust 后端 `launch_app` 执行，使用条目中的路径、启动参数和工作目录。

@@ -1,4 +1,5 @@
 use ib_pinyin::{matcher::PinyinMatcher, pinyin::PinyinNotation};
+use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
 use std::ffi::OsStr;
@@ -6,6 +7,7 @@ use std::ffi::OsStr;
 use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
+    mpsc,
     Arc, Mutex, OnceLock,
 };
 use std::{
@@ -48,6 +50,8 @@ static MAIN_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 static MAIN_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static SETTINGS_DESTROY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static SCAN_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceLock::new();
+static WATCHER_GENERATION: AtomicU64 = AtomicU64::new(0);
+static WATCH_TRIGGER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -216,11 +220,17 @@ fn get_settings() -> AppSettings {
 #[tauri::command]
 fn save_settings(app: AppHandle, mut settings: AppSettings) -> Result<(), String> {
     settings.tooltip_opacity = settings.tooltip_opacity.min(100);
+    let dirs_changed = load_settings()
+        .map(|old| old.watched_directories != settings.watched_directories)
+        .unwrap_or(true);
     configure_autostart(settings.autostart_enabled).map_err(|error| error.to_string())?;
     store_settings(&settings).map_err(|error| error.to_string())?;
     ensure_launcher_desktop_shortcut(settings.auto_add_desktop_shortcut)
         .map_err(|error| error.to_string())?;
     let _ = app.emit("settings-updated", settings);
+    if dirs_changed {
+        restart_directory_watcher(app);
+    }
     Ok(())
 }
 
@@ -400,6 +410,79 @@ fn spawn_scan(app: AppHandle) {
         SCAN_RUNNING.store(false, Ordering::Relaxed);
         set_scan_active(&app, false);
     });
+}
+
+fn start_directory_watcher(app: AppHandle) {
+    let generation = WATCHER_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+
+    let settings = match load_settings() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("directory watcher: failed to load settings: {e}");
+            return;
+        }
+    };
+
+    if settings.watched_directories.is_empty() {
+        return;
+    }
+
+    let dirs: Vec<PathBuf> = settings
+        .watched_directories
+        .iter()
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .collect();
+
+    if dirs.is_empty() {
+        return;
+    }
+
+    let (tx, rx) = mpsc::channel::<()>();
+
+    let mut watcher = match notify::recommended_watcher(move |_| {
+        let _ = tx.send(());
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("directory watcher: failed to create: {e}");
+            return;
+        }
+    };
+
+    for dir in &dirs {
+        if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
+            eprintln!("directory watcher: failed to watch {}: {e}", dir.display());
+        }
+    }
+
+    thread::spawn(move || {
+        loop {
+            if WATCHER_GENERATION.load(Ordering::Relaxed) != generation {
+                break;
+            }
+
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(()) => {
+                    let count = WATCH_TRIGGER.fetch_add(1, Ordering::Relaxed) + 1;
+                    let app = app.clone();
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_secs(30));
+                        if WATCH_TRIGGER.load(Ordering::Relaxed) == count {
+                            spawn_scan(app);
+                        }
+                    });
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn restart_directory_watcher(app: AppHandle) {
+    WATCHER_GENERATION.fetch_add(1, Ordering::Relaxed);
+    start_directory_watcher(app);
 }
 
 fn set_scan_active(app: &AppHandle, active: bool) {
@@ -1055,74 +1138,69 @@ fn scan_directory(
     seen: &mut HashMap<String, ()>,
     apps: &mut Vec<AppEntry>,
 ) -> io::Result<()> {
-    let mut pending = vec![root.to_path_buf()];
+    let Ok(entries) = fs::read_dir(root) else {
+        return Ok(());
+    };
 
-    while let Some(directory) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&directory) else {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
             continue;
         };
 
-        for entry in entries {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
+        if file_type.is_dir() {
+            continue;
+        }
 
-            if file_type.is_dir() {
-                pending.push(path);
-                continue;
-            }
+        if !file_type.is_file() {
+            continue;
+        }
 
-            if !file_type.is_file() {
-                continue;
-            }
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_lowercase();
 
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_lowercase();
-
-            let source_key = normalize_key(path.to_string_lossy().as_ref());
-            let previous_app = previous_by_source.get(&source_key);
-            let refresh_icon = previous_app.is_some();
-            let app_entry = match extension.as_str() {
-                "exe" | "lnk" => {
-                    if let Some(previous_app) =
-                        previous_app.filter(|app| can_reuse_scanned_app(app))
-                    {
-                        if push_scanned_app(previous_app.clone(), seen, apps) {
-                            continue;
-                        }
-                    }
-
-                    match extension.as_str() {
-                        "exe" => Some(app_entry_from_exe(&path, refresh_icon)),
-                        "lnk" => app_entry_from_shortcut(&path, refresh_icon),
-                        _ => None,
+        let source_key = normalize_key(path.to_string_lossy().as_ref());
+        let previous_app = previous_by_source.get(&source_key);
+        let refresh_icon = previous_app.is_some();
+        let app_entry = match extension.as_str() {
+            "exe" | "lnk" => {
+                if let Some(previous_app) =
+                    previous_app.filter(|app| can_reuse_scanned_app(app))
+                {
+                    if push_scanned_app(previous_app.clone(), seen, apps) {
+                        continue;
                     }
                 }
-                _ => None,
-            };
 
-            if let Some(mut app_entry) = app_entry {
-                if app_entry.path.is_empty() {
-                    continue;
+                match extension.as_str() {
+                    "exe" => Some(app_entry_from_exe(&path, refresh_icon)),
+                    "lnk" => app_entry_from_shortcut(&path, refresh_icon),
+                    _ => None,
                 }
-
-                if let Some(metadata) = find_previous_metadata(
-                    &app_entry,
-                    previous_metadata,
-                    previous_source_metadata,
-                    previous_launch_metadata,
-                ) {
-                    apply_metadata(&mut app_entry, metadata);
-                }
-                push_scanned_app(app_entry, seen, apps);
             }
+            _ => None,
+        };
+
+        if let Some(mut app_entry) = app_entry {
+            if app_entry.path.is_empty() {
+                continue;
+            }
+
+            if let Some(metadata) = find_previous_metadata(
+                &app_entry,
+                previous_metadata,
+                previous_source_metadata,
+                previous_launch_metadata,
+            ) {
+                apply_metadata(&mut app_entry, metadata);
+            }
+            push_scanned_app(app_entry, seen, apps);
         }
     }
 
@@ -2499,6 +2577,7 @@ pub fn run() {
         .setup(|app| {
             create_tray(app)?;
             spawn_scan(app.handle().clone());
+            start_directory_watcher(app.handle().clone());
             let settings = load_settings().unwrap_or_default();
             if should_show_main_window_on_launch(&settings) {
                 show_main_window(app.handle());
