@@ -457,6 +457,7 @@ fn start_directory_watcher(app: AppHandle) {
     }
 
     thread::spawn(move || {
+        let _watcher = watcher; // keep watcher alive for the lifetime of this thread
         loop {
             if WATCHER_GENERATION.load(Ordering::Relaxed) != generation {
                 break;
