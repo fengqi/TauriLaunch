@@ -285,6 +285,13 @@ fn hide_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
 }
 
 #[tauri::command]
+fn restore_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
+    let apps = restore_stored_app(&app_id).map_err(|error| error.to_string())?;
+    let _ = app.emit("apps-updated", apps.clone());
+    Ok(apps)
+}
+
+#[tauri::command]
 fn pin_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
     let apps = pin_stored_app(&app_id).map_err(|error| error.to_string())?;
     let _ = app.emit("apps-updated", apps.clone());
@@ -791,6 +798,18 @@ fn hide_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
     };
 
     app.hidden = true;
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    Ok(configured_apps(apps))
+}
+
+fn restore_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let Some(app) = apps.iter_mut().find(|app| app.id == app_id) else {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "应用不存在"));
+    };
+
+    app.hidden = false;
     sort_apps(&mut apps);
     store_apps(&apps)?;
     Ok(configured_apps(apps))
@@ -2589,6 +2608,7 @@ pub fn run() {
             dismiss_main_window,
             launch_app,
             hide_app,
+            restore_app,
             pin_app,
             reset_app_position,
             rename_app,
