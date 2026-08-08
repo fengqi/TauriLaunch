@@ -2395,6 +2395,15 @@ fn schedule_retained_windows_destroy(app: &AppHandle) {
     }
 }
 
+fn main_window_height(icon_size: u32) -> f64 {
+    // 完整显示 4 行，并在第 4 行下方的行间距中间收尾（不露出第 5 行）。
+    // tile 实际高度由 CSS .app-tile 的 min-height = max(104px, icon_size+66px) 决定。
+    // 经实测校准：470px→3.73 行，556px→4.5 行，反推每行约 111.7px、固定偏移约 53px。
+    // 4 行 + 完整收尾间距 ≈ 4 * tile + 4 * 10px(3 行间距 + 1 收尾间距) + 53px(偏移)。
+    let tile = (icon_size as f64 + 66.0).max(104.0);
+    4.0 * tile + 93.0
+}
+
 fn show_main_window(app: &AppHandle) {
     cancel_delayed_destroy(MAIN_LABEL);
     if let Some(window) = app.get_webview_window(MAIN_LABEL) {
@@ -2406,9 +2415,10 @@ fn show_main_window(app: &AppHandle) {
         return;
     }
 
+    let icon_size = load_settings().map(|s| s.icon_size).unwrap_or(DEFAULT_ICON_SIZE);
     match WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
         .title("应用列表")
-        .inner_size(720.0, 470.0)
+        .inner_size(720.0, main_window_height(icon_size))
         .min_inner_size(620.0, 360.0)
         .resizable(false)
         .decorations(false)
