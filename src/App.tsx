@@ -498,6 +498,19 @@ function LauncherWindow() {
     }
   }
 
+  async function permanentDeleteApp(app: AppEntry) {
+    try {
+      const updatedApps = await invoke<AppEntry[]>("permanent_delete_app", {
+        appId: app.id,
+      });
+      await applyUpdatedApps(updatedApps);
+      setTooltip(null);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
   async function pinApp(app: AppEntry) {
     try {
       const updatedApps = await invoke<AppEntry[]>("pin_app", {
@@ -888,15 +901,27 @@ function LauncherWindow() {
             重建图标
           </button>
           {contextMenu.app.hidden ? (
-            <button
-              type="button"
-              onClick={() => {
-                closeContextMenu();
-                void restoreApp(contextMenu.app);
-              }}
-            >
-              恢复
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  closeContextMenu();
+                  void restoreApp(contextMenu.app);
+                }}
+              >
+                恢复
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => {
+                  closeContextMenu();
+                  void permanentDeleteApp(contextMenu.app);
+                }}
+              >
+                永久删除
+              </button>
+            </>
           ) : (
             <button
               type="button"

@@ -292,6 +292,13 @@ fn restore_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> 
 }
 
 #[tauri::command]
+fn permanent_delete_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
+    let apps = permanent_delete_stored_app(&app_id).map_err(|error| error.to_string())?;
+    let _ = app.emit("apps-updated", apps.clone());
+    Ok(apps)
+}
+
+#[tauri::command]
 fn pin_app(app: AppHandle, app_id: String) -> Result<Vec<AppEntry>, String> {
     let apps = pin_stored_app(&app_id).map_err(|error| error.to_string())?;
     let _ = app.emit("apps-updated", apps.clone());
@@ -779,25 +786,30 @@ fn launch_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
 }
 
 fn hide_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
-    let mut apps = load_apps()?;
     let settings = load_settings().unwrap_or_default();
     if settings.physical_delete_enabled {
-        let Some(index) = apps.iter().position(|app| app.id == app_id) else {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "app not found"));
-        };
-
-        let app = apps.remove(index);
-        remove_icon_cache(&app);
-        sort_apps(&mut apps);
-        store_apps(&apps)?;
-        return Ok(configured_apps(apps));
+        return permanent_delete_stored_app(app_id);
     }
 
+    let mut apps = load_apps()?;
     let Some(app) = apps.iter_mut().find(|app| app.id == app_id) else {
         return Err(io::Error::new(io::ErrorKind::NotFound, "应用不存在"));
     };
 
     app.hidden = true;
+    sort_apps(&mut apps);
+    store_apps(&apps)?;
+    Ok(configured_apps(apps))
+}
+
+fn permanent_delete_stored_app(app_id: &str) -> io::Result<Vec<AppEntry>> {
+    let mut apps = load_apps()?;
+    let Some(index) = apps.iter().position(|app| app.id == app_id) else {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "应用不存在"));
+    };
+
+    let app = apps.remove(index);
+    remove_icon_cache(&app);
     sort_apps(&mut apps);
     store_apps(&apps)?;
     Ok(configured_apps(apps))
@@ -2609,6 +2621,7 @@ pub fn run() {
             launch_app,
             hide_app,
             restore_app,
+            permanent_delete_app,
             pin_app,
             reset_app_position,
             rename_app,
